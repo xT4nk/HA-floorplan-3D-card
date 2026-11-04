@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floorplan 3D Card — preview</title>
+<style>
+  body{margin:0;background:#0b0e13;color:#ddd;font:14px -apple-system,"Segoe UI",Roboto,sans-serif}
+  main{max-width:1200px;margin:0 auto;padding:16px}
+  .bar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+  button{background:#1c232c;color:#ddd;border:1px solid #333c47;border-radius:8px;padding:6px 10px;cursor:pointer}
+  #log{font:12px ui-monospace,monospace;color:#8b96a3;white-space:pre-wrap;margin-top:8px;max-height:120px;overflow:auto}
+</style>
+</head>
+<body>
+<main>
+  <h3 style="margin:4px 0">Floorplan 3D Card — preview without Home Assistant</h3>
+  <div>Serve the repo root (<code>python3 -m http.server</code>) and open <code>/examples/preview.html</code>.
+    Query: <code>?room=living</code>, <code>?theme=light</code>, <code>?rotate=1</code>, <code>?height=700px</code>, <code>?bare=1</code>.</div>
+  <div class="bar" id="bar"></div>
+  <floorplan-3d-card id="card"></floorplan-3d-card>
+  <div id="log"></div>
+</main>
+<script type="module">
+import '../dist/floorplan-3d-card.js';
+import { DEMO_PLAN } from '../dist/floorplan-demo.js';
+
+const q = new URLSearchParams(location.search);
+const log = m => { const el = document.getElementById('log'); el.textContent = `${m}\n` + el.textContent; };
+
+// ---- fake Home Assistant: areas, registries and states for the demo apartment
+const areas = { living_room: 'Living room', kitchen: 'Kitchen', hallway: 'Hall', bedroom: 'Bedroom',
+  bathroom: 'Bathroom', closet: 'Closet', office: 'Office' };
+const st = (state, attributes = {}) => ({ state, attributes, last_changed: new Date().toISOString() });
+const states = {
+  'light.living_room':   st('on',  { friendly_name: 'Ceiling light', brightness: 200, rgb_color: [255, 190, 120] }),
+  'light.floor_lamp':    st('off', { friendly_name: 'Floor lamp' }),
+  'light.kitchen':       st('off', { friendly_name: 'Kitchen light' }),
+  'light.bedroom':       st('on',  { friendly_name: 'Bedside lamp', brightness: 90, rgb_color: [120, 160, 255] }),
+  'light.office':        st('off', { friendly_name: 'Desk lamp' }),
+  'cover.living_room':   st('open', { friendly_name: 'Living room shutter', current_position: 100 }),
+  'cover.balcony':       st('open', { friendly_name: 'Balcony shutter', current_position: 60 }),
+  'cover.bedroom':       st('closed', { friendly_name: 'Bedroom shutter', current_position: 0 }),
+  'cover.office':        st('open', { friendly_name: 'Office shutter', current_position: 30 }),
+  'binary_sensor.kitchen_window': st('on', { friendly_name: 'Kitchen window', device_class: 'window' }),
+  'sensor.living_temperature':  st('21.4', { friendly_name: 'Temperature', device_class: 'temperature', unit_of_measurement: '°C' }),
+  'sensor.living_humidity':     st('48',   { friendly_name: 'Humidity', device_class: 'humidity', unit_of_measurement: '%' }),
+  'sensor.bedroom_temperature': st('19.8', { friendly_name: 'Temperature', device_class: 'temperature', unit_of_measurement: '°C' }),
+  'sensor.office_temperature':  st('22.6', { friendly_name: 'Temperature', device_class: 'temperature', unit_of_measurement: '°C' }),
+  'climate.living_room': st('heat', { friendly_name: 'Thermostat', temperature: 21, current_temperature: 21.4 }),
+  'media_player.tv':     st('off', { friendly_name: 'TV' }),
+  'switch.dishwasher':   st('on',  { friendly_name: 'Dishwasher' }),
+  'fan.bathroom':        st('off', { friendly_name: 'Extractor fan' }),
+};
+const where = {
+  'light.living_room': 'living_room', 'light.floor_lamp': 'living_room', 'cover.living_room': 'living_room',
+  'cover.balcony': 'living_room', 'sensor.living_temperature': 'living_room', 'sensor.living_humidity': 'living_room',
+  'climate.living_room': 'living_room', 'media_player.tv': 'living_room',
+  'light.kitchen': 'kitchen', 'binary_sensor.kitchen_window': 'kitchen', 'switch.dishwasher': 'kitchen',
+  'light.bedroom': 'bedroom', 'cover.bedroom': 'bedroom', 'sensor.bedroom_temperature': 'bedroom',
+  'light.office': 'office', 'cover.office': 'office', 'sensor.office_temperature': 'office',
+  'fan.bathroom': 'bathroom',
+};
+const entities = Object.fromEntries(Object.keys(states).map(id => [id, { entity_id: id, area_id: where[id] || null }]));
+let hass = {
+  states, entities, devices: {},
+  areas: Object.fromEntries(Object.entries(areas).map(([id, name]) => [id, { area_id: id, name }])),
+  themes: { darkMode: q.get('theme') !== 'light' },
+  callService(domain, service, data) { log(`callService ${domain}.${service} ${JSON.stringify(data)}`); },
+};
+const card = document.getElementById('card');
+card.setConfig({ type: 'custom:floorplan-3d-card', height: q.get('height') || '600px',
+  theme: q.get('theme') || 'auto', auto_rotate: q.get('rotate') === '1', ...DEMO_PLAN });
+card.hass = hass;
+card.addEventListener('hass-more-info', e => log(`more-info → ${e.detail.entityId}`));
+card.addEventListener('floorplan-room-changed', e => log(`room → ${e.detail.room}`));
+
+const push = (id, state, attrs = {}) => {
+  hass = { ...hass, states: { ...hass.states, [id]: st(state, { ...hass.states[id].attributes, ...attrs }) } };
+  card.hass = hass;
+  log(`${id} = ${state}`);
+};
+const toggle = id => push(id, hass.states[id].state === 'on' ? 'off' : 'on');
+const buttons = {
+  'Living light': () => toggle('light.living_room'),
+  'Kitchen light': () => toggle('light.kitchen'),
+  'Office light': () => toggle('light.office'),
+  'Kitchen window': () => toggle('binary_sensor.kitchen_window'),
+  'Bedroom shutter': () => { const c = hass.states['cover.bedroom'].attributes.current_position ? 0 : 100;
+    push('cover.bedroom', c ? 'open' : 'closed', { current_position: c }); },
+  'Temp +1': () => { const s = hass.states['sensor.living_temperature']; push(s.entity_id || 'sensor.living_temperature', String((+s.state + 1).toFixed(1))); },
+  'Overview': () => card.selectRoom(null),
+};
+for (const [label, fn] of Object.entries(buttons)) {
+  const b = document.createElement('button'); b.textContent = label; b.onclick = fn;
+  document.getElementById('bar').appendChild(b);
+}
+if (q.get('room')) setTimeout(() => card.selectRoom(q.get('room')), 300);
+if (q.get('bare')) { for (const el of document.querySelectorAll('main > :not(floorplan-3d-card)')) el.style.display = 'none';
+  document.querySelector('main').style.padding = '0'; }
+window.__card = card;
+</script>
+</body>
+</html>

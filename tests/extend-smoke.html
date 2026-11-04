@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<!-- Smoke test of the extension hooks (docs/EXTENDING.md): serve the repo root, open /tests/extend-smoke.html -->
+<html><head><meta charset="utf-8"><style>body{margin:0;background:#000}</style></head><body>
+<my-home-card id="c"></my-home-card>
+<script type="module">
+import { Floorplan3DCard, THREE } from '../dist/floorplan-3d-card.js';
+import { DEMO_PLAN } from '../dist/floorplan-demo.js';
+class MyHomeCard extends Floorplan3DCard {
+  async renderRoomPanel(room, list) {
+    if (room.id !== 'kitchen') return super.renderRoomPanel(room, list);
+    list.innerHTML = '<div class="row wide">CUSTOM PANEL</div>';
+  }
+  getRoomState(room) {
+    const st = super.getRoomState(room);
+    if (room.id === 'bathroom') st.sub = 'Fan on';
+    return st;
+  }
+  onSceneReady(scene) {
+    const sofa = new THREE.Mesh(new THREE.BoxGeometry(200, 40, 90), new THREE.MeshStandardMaterial({ color: 0x3060c0 }));
+    sofa.position.set(250, 30, 330);
+    scene.addToRoom('living', sofa);
+  }
+  onHassUpdate(hass) {
+    if (!this._chip) { this._chip = document.createElement('div'); this.overlay.appendChild(this._chip); }
+    this._chip.textContent = `${hass.states['sensor.power'].state} W`;
+  }
+  extraStyles() { return '#overlay div{position:absolute;right:60px;top:14px;color:#ffb35c;font-size:20px}'; }
+}
+customElements.define('my-home-card', MyHomeCard);
+const c = document.getElementById('c');
+c.setConfig({ type: 'custom:my-home-card', height: '600px', ...DEMO_PLAN });
+c.hass = { states: { 'sensor.power': { state: '1234', attributes: {} } }, entities: {}, areas: {}, themes: { darkMode: true } };
+const q = new URLSearchParams(location.search);
+if (q.get('room')) setTimeout(() => c.selectRoom(q.get('room')), 300);
+</script></body></html>
