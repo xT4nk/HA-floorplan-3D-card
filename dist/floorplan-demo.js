@@ -9,7 +9,8 @@ export const DEMO_PLAN = {
     { id: 'closet',   name: 'Closet',      area: 'closet',      rect: [380, 620, 200, 140], floor: 'wood' },
     { id: 'office',   name: 'Office',      area: 'office',
       points: [[580, 420], [820, 420], [820, 760], [580, 760]], floor: 'carpet' },
-    { id: 'balcony',  name: 'Balcony',     rect: [-140, 60, 140, 300], floor: 'concrete', walls: false },
+    { id: 'balcony',  name: 'Balcony',     rect: [-140, 60, 140, 300], floor: 'concrete', walls: false,
+      railing: true, part_of: 'living' },
   ],
   openings: [
     { type: 'opening', from: [520, 40], to: [520, 220] },               // open kitchen

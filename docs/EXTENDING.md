@@ -9,12 +9,19 @@ The card is three layers, each usable on its own:
 | `floorplan-3d-card.js` | `Floorplan3DCard`: the Lovelace element. Reads `hass`, feeds the scene, renders the panel. | the two above |
 
 ## Your own card on top of it
-Import the class, subclass it, override the hooks you need, register a new element name. The plan stays in
+Take the class, subclass it, override the hooks you need, register a new element name. The plan stays in
 YAML (or in your own file), the engine stays untouched.
 
+Get the class from the registry instead of importing it by path: HACS loads the card with a `?hacstag=…`
+URL that changes with every update, and importing another URL would load a second copy (or an old one from
+the cache). Everything an extension needs hangs on the class: `THREE`, `FloorplanScene`, `normalizeConfig`,
+`buildPlan`, `VERSION`.
+
 ```js
-// /config/www/my-home-card.js
-import { Floorplan3DCard, THREE } from '/hacsfiles/floorplan-3d-card/floorplan-3d-card.js';
+// /config/www/my-home-card.js — add it as a resource (JavaScript module) next to the HACS one
+await customElements.whenDefined('floorplan-3d-card');
+const Floorplan3DCard = customElements.get('floorplan-3d-card');
+const { THREE } = Floorplan3DCard;
 
 class MyHomeCard extends Floorplan3DCard {
   // the panel: your own tiles/popups instead of the default tile cards
@@ -50,6 +57,9 @@ class MyHomeCard extends Floorplan3DCard {
   }
 
   extraStyles() { return '#overlay div{position:absolute;right:60px;top:14px;color:#ffb35c}'; }
+
+  // keep the plan clear of your own column on the right while no room is open
+  getViewInset(roomId) { return roomId ? super.getViewInset(roomId) : { right: 320 }; }
 }
 customElements.define('my-home-card', MyHomeCard);
 ```
@@ -62,20 +72,29 @@ customElements.define('my-home-card', MyHomeCard);
 | `getRoomState(room)` | `{ glow: {intensity, color}, sub: "21.4° · 48%" }` | called on every `hass` update: keep it cheap |
 | `renderRoomPanel(room, list)` | native tile cards (plain rows outside HA) | may be `async`; check `this._room === room.id` after awaits |
 | `onOpeningTap(opening)` | more-info of `cover`, else `contact` | `opening` has `id, type, name, cover, contact, rooms, center…` |
+| `getRoomMeta(room, state)` | `"16.6 m² · 21.4° · 48%"` | second line of the panel header; `''` hides it |
+| `getViewInset(roomId)` | the panel: `{left}`, or `{bottom}` on narrow cards; `null` in the overview | `{left, right, top, bottom}` in px covered over the 3D view; the plan is framed in the rest. Call `refreshInset()` when your overlays change size |
+| `getTheme()` | from the `theme` option (`auto`, `sun`, `dark`, `light`) | return `'dark'` or `'light'`; called on every `hass` update |
 | `onSceneReady(scene)` | — | once per config; `scene.addToRoom(roomId, object3D)` |
 | `onHassUpdate(hass)` | — | after the scene has been updated |
 | `extraStyles()` | `''` | CSS added to the shadow root |
 
-Helpers: `selectRoom(id | null)`, `openMoreInfo(entityId)`, `this.overlay` (layer over the canvas),
-`this.hass`. Event: `floorplan-room-changed` (`detail.room`).
+Helpers: `selectRoom(id | null)` (a `part_of` room opens its parent), `openMoreInfo(entityId)`,
+`areaEntities(room)` (entity ids of the room's area, cached), `refreshInset()`, `isMobile`,
+`this.overlay` (layer over the canvas), `this.hass`. Event: `floorplan-room-changed` (`detail.room`).
+
+Names starting with `_` are internal and may change in any release; mixins can use them for their own
+fields without clashing with the hooks above.
 
 `room` objects are the normalized rooms: `id, name, area, poly, bbox, labelAt, floor, entities, exclude,
-lights, temperature, walls, raw` (`raw` is the YAML as written, so you can add your own keys to it).
+lights, temperature, humidity, walls, railing, part_of, disabled, raw` (`raw` is the YAML as written, so you
+can add your own keys to it).
 
 ## Scene API (`FloorplanScene`)
 `setRoomGlow(id, 0..1, [r,g,b])`, `setRoomSubLabel(id, text)`, `setRoomName(id, text)`,
 `setShutter(openingId, closed 0..1)`, `setOpenAlert(openingId, bool)`, `focusRoom(id | null)`, `resetView()`,
-`setTheme('dark' | 'light')`, `setAutoRotate(bool)`, `addToRoom(id, object3D)`, `invalidate()` (draw one
+`setTheme('dark' | 'light')`, `setAutoRotate(bool)`, `setInset({left, right, top, bottom} | null)`,
+`addToRoom(id, object3D)`, `invalidate()` (draw one
 frame after you changed something yourself), `scene`, `camera`, `world` (Three.js objects).
 
 Draw on demand: after changing objects directly, call `scene.invalidate()`; nothing is redrawn otherwise.

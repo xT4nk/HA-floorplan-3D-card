@@ -17,12 +17,12 @@
  * modules after an update (HACS versions only this file's URL). Bump VERSION
  * and every ?v= together; tests/release.test.mjs checks it.
  */
-import { normalizeConfig, buildPlan } from './floorplan-geometry.js?v=0.1.0';
-import { FloorplanScene, THREE } from './floorplan-scene.js?v=0.1.0';
-import { DEMO_PLAN } from './floorplan-demo.js?v=0.1.0';
+import { normalizeConfig, buildPlan } from './floorplan-geometry.js?v=0.2.0';
+import { FloorplanScene, THREE } from './floorplan-scene.js?v=0.2.0';
+import { DEMO_PLAN } from './floorplan-demo.js?v=0.2.0';
 
 export { THREE, FloorplanScene, normalizeConfig, buildPlan };
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 const DOMAIN_ORDER = ['light', 'climate', 'cover', 'fan', 'media_player', 'switch', 'vacuum', 'lock',
   'humidifier', 'water_heater', 'sensor', 'binary_sensor', 'camera', 'scene', 'script', 'button'];
@@ -107,8 +107,8 @@ export class Floorplan3DCard extends HTMLElement {
   setConfig(config) {
     const model = normalizeConfig(config);     // throws → Lovelace shows the error card
     const plan = buildPlan(model);
-    if (config.theme && !['auto', 'dark', 'light'].includes(config.theme))
-      throw new Error('floorplan-3d-card: "theme" must be auto, dark or light');
+    if (config.theme && !['auto', 'sun', 'dark', 'light'].includes(config.theme))
+      throw new Error('floorplan-3d-card: "theme" must be auto, sun, dark or light');
     this._config = config;
     this._model = model;
     this._plan = plan;
@@ -156,8 +156,8 @@ export class Floorplan3DCard extends HTMLElement {
     this.$wrap.style.setProperty('--fp-height', this._config.height || '480px');
     const canvas = root.getElementById('c');
     try {
-      this._scene = new FloorplanScene(canvas, this._model, this._plan, {
-        theme: this._themeName(),
+      this._scene = this._createScene(canvas, {
+        theme: this.getTheme(),
         autoRotate: !!this._config.auto_rotate,
         labels: this._config.labels !== false,
         onPick: hit => this._onPick(hit),
@@ -170,6 +170,9 @@ export class Floorplan3DCard extends HTMLElement {
     if (this._hass) this._sync();
     this.onSceneReady(this._scene);
   }
+
+  /** Builds the 3D scene (tests replace it with a stand-in: there is no WebGL in Node). */
+  _createScene(canvas, opts) { return new FloorplanScene(canvas, this._model, this._plan, opts); }
 
   _teardownScene() {
     this._unobserve();
@@ -198,15 +201,16 @@ export class Floorplan3DCard extends HTMLElement {
     const w = this.$wrap.clientWidth, h = this.$wrap.clientHeight;
     this.$wrap.classList.toggle('mobile', w < MOBILE_W);
     this._scene.setSize(w, h);
-    this._updateInset();
+    this.refreshInset();
   }
 
-  _updateInset() {
-    if (!this._scene) return;
-    if (!this._room) return this._scene.setInset(null);
-    const mobile = this.$wrap.classList.contains('mobile');
-    this._scene.setInset(mobile ? { top: this.$panel.offsetHeight } : { left: this.$panel.offsetWidth });
+  /** Re-reads getViewInset() and re-frames the plan: call it when your own overlays change size. */
+  refreshInset() {
+    if (this._scene) this._scene.setInset(this.getViewInset(this._room) || null);
   }
+
+  /** True when the card is narrow and the panel is a bottom drawer. */
+  get isMobile() { return !!this.$wrap && this.$wrap.classList.contains('mobile'); }
 
   _showError(msg) {
     const e = this.shadowRoot.getElementById('err');
@@ -214,17 +218,11 @@ export class Floorplan3DCard extends HTMLElement {
     console.warn('floorplan-3d-card:', msg);
   }
 
-  _themeName() {
-    const t = this._config.theme || 'auto';
-    if (t !== 'auto') return t;
-    const dark = this._hass && this._hass.themes ? this._hass.themes.darkMode : true;
-    return dark === false ? 'light' : 'dark';
-  }
 
   // ------------------------------------------------------------ live state
   _sync() {
     const hass = this._hass, S = this._scene;
-    const theme = this._themeName();
+    const theme = this.getTheme();
     if (this._applied.theme !== theme) { this._applied.theme = theme; S.setTheme(theme); }
     for (const room of this._model.rooms) {
       const name = this.roomName(room);
@@ -255,8 +253,9 @@ export class Floorplan3DCard extends HTMLElement {
     this.onHassUpdate(hass);
   }
 
-  /** Entities of the room's HA area (or the explicit list), panel order. */
-  _areaEntities(room) {
+  /** Entities of the room's HA area (or its explicit `entities:` list), panel order.
+   *  Public helper for subclasses; cached until the registries change. */
+  areaEntities(room) {
     const hass = this._hass;
     if (!hass) return [];
     const ex = new Set(room.exclude);
@@ -282,6 +281,26 @@ export class Floorplan3DCard extends HTMLElement {
     return out;
   }
 
+  /** Sensor of a room for a device class: `temperature:`/`humidity:` of the room (false = none), then the one
+   *  chosen for the area in Home Assistant (Settings → Areas), then the area's first one. */
+  _roomSensor(room, dc, area) {
+    const hass = this._hass;
+    const own = room[dc];
+    if (own === false) return null;          // `temperature: false`: this room shows none
+    if (own) return own;
+    const a = room.area && hass.areas && hass.areas[room.area];
+    const chosen = a && a[`${dc}_entity_id`];
+    if (chosen && hass.states[chosen]) return chosen;
+    return area.find(id => id.startsWith('sensor.') && deviceClass(hass, id) === dc);
+  }
+
+  /** The room a tap on `id` should open: its part_of parent; null if disabled. */
+  _targetRoom(id) {
+    let room = this._model.rooms.find(r => r.id === id);
+    if (room && room.part_of) room = this._model.rooms.find(r => r.id === room.part_of);
+    return room && !room.disabled ? room : null;
+  }
+
   // ------------------------------------------------------------ HOOKS (override in subclasses)
   /** HOOK: display name of a room. */
   roomName(room) {
@@ -292,13 +311,13 @@ export class Floorplan3DCard extends HTMLElement {
 
   /** HOOK: entity ids listed in the room panel. */
   getRoomEntities(room) {
-    return this._areaEntities(room).filter(id => !PANEL_SKIP.has(id.split('.')[0]));
+    return this.areaEntities(room).filter(id => !PANEL_SKIP.has(id.split('.')[0]));
   }
 
   /** HOOK: overlay values for a room: { glow: {intensity 0..1, color [r,g,b]} | null, sub: string | null }. */
   getRoomState(room) {
     const hass = this._hass;
-    const area = this._areaEntities(room);
+    const area = this.areaEntities(room);
     const lights = room.lights || area.filter(id => id.startsWith('light.'));
     let n = 0, sum = 0, color = null;
     for (const id of lights) {
@@ -309,8 +328,8 @@ export class Floorplan3DCard extends HTMLElement {
       if (!color && Array.isArray(s.attributes.rgb_color)) color = s.attributes.rgb_color;
     }
     const glow = n ? { intensity: Math.max(0.25, sum / n), color: color || WARM } : null;
-    const temp = room.temperature || area.find(id => id.startsWith('sensor.') && deviceClass(hass, id) === 'temperature');
-    const hum = room.raw.humidity || area.find(id => id.startsWith('sensor.') && deviceClass(hass, id) === 'humidity');
+    const temp = this._roomSensor(room, 'temperature', area);
+    const hum = this._roomSensor(room, 'humidity', area);
     const parts = [];
     const t = num(hass.states[temp]);
     if (t !== null) parts.push(`${t.toFixed(1)}°`);
@@ -348,6 +367,33 @@ export class Floorplan3DCard extends HTMLElement {
     if (id) this.openMoreInfo(id);
   }
 
+  /** HOOK: second line of the panel header. Default: "16.6 m² · 21.4° · 48%". Return '' to hide it. */
+  getRoomMeta(room, state) {
+    const m2 = Math.abs(polyArea(room.poly)) / 10000;
+    return [`${m2.toFixed(1)} m²`, state && state.sub].filter(Boolean).join(' · ');
+  }
+
+  /** HOOK: space covered over the 3D view, {left, right, top, bottom} in px, so the plan is
+   *  framed in the free area. Default: the room panel (left, or bottom on narrow cards). */
+  getViewInset(roomId) {
+    if (!roomId || !this.$panel) return null;
+    return this.isMobile ? { bottom: this.$panel.offsetHeight } : { left: this.$panel.offsetWidth };
+  }
+
+  /** HOOK: 'dark' or 'light'. Default from the `theme` option: auto = Home Assistant's dark mode,
+   *  sun = dark after sunset (sun.sun), or a fixed dark / light. Called on every hass update. */
+  getTheme() {
+    const t = (this._config && this._config.theme) || 'auto';
+    if (t === 'dark' || t === 'light') return t;
+    const hass = this._hass;
+    if (t === 'sun') {
+      const s = hass && hass.states['sun.sun'];
+      if (s && (s.state === 'below_horizon' || s.state === 'above_horizon')) return s.state === 'below_horizon' ? 'dark' : 'light';
+    }
+    const dark = hass && hass.themes ? hass.themes.darkMode : true;
+    return dark === false ? 'light' : 'dark';
+  }
+
   /** HOOK: called once the 3D scene exists (add objects with scene.addToRoom). */
   onSceneReady(scene) {}  // eslint-disable-line no-unused-vars
 
@@ -360,16 +406,16 @@ export class Floorplan3DCard extends HTMLElement {
   // ------------------------------------------------------------ actions
   /** Opens a room (zoom + panel) or goes back to the overview with null. */
   selectRoom(id) {
-    const room = id ? this._model.rooms.find(r => r.id === id) : null;
-    if (!this._scene) return;
+    const room = id ? this._targetRoom(id) : null;
+    if (!this._scene || (id && !room)) return;
     if (!room) {
       const was = this._room;
       this._closePanel();
-      this._updateInset();
+      this.refreshInset();
       if (was) this._scene.focusRoom(null);
     } else if (this._room !== room.id) {
       this._openPanel(room);
-      this._updateInset();
+      this.refreshInset();
       this._scene.focusRoom(room.id);
     }
     this.dispatchEvent(new CustomEvent('floorplan-room-changed', { detail: { room: this._room }, bubbles: true, composed: true }));
@@ -382,13 +428,18 @@ export class Floorplan3DCard extends HTMLElement {
   _onPick(hit) {
     if (!hit) { if (this._room) this.selectRoom(null); return; }
     if (hit.kind === 'room') {
-      const room = this._model.rooms.find(r => r.id === hit.id);
-      if (room && !room.raw.disabled) this.selectRoom(room.id);
+      const room = this._targetRoom(hit.id);
+      if (room) this.selectRoom(room.id);
       return;
     }
     const op = hit.opening;
-    // a ghosted window belongs to another room: go there first
-    if (this._room && !op.rooms.includes(this._room) && op.rooms.length) { this.selectRoom(op.rooms[0]); return; }
+    // a ghosted window belongs to another room: go there first (a room with something to show)
+    const rooms = [...new Set(op.rooms.map(id => this._targetRoom(id)).filter(Boolean))];
+    if (this._room && rooms.length && !rooms.some(r => r.id === this._room)) {
+      const go = rooms.find(r => r.area || r.entities) || rooms[0];
+      this.selectRoom(go.id);
+      return;
+    }
     this.onOpeningTap(op);
   }
 
@@ -407,8 +458,7 @@ export class Floorplan3DCard extends HTMLElement {
     const room = this._model.rooms.find(r => r.id === this._room);
     if (!room) return;
     const st = this._hass ? this.getRoomState(room) : null;
-    const m2 = Math.abs(polyArea(room.poly)) / 10000;
-    this.shadowRoot.getElementById('pMeta').textContent = [`${m2.toFixed(1)} m²`, st && st.sub].filter(Boolean).join(' · ');
+    this.shadowRoot.getElementById('pMeta').textContent = this.getRoomMeta(room, st) || '';
   }
 
   _closePanel() {
@@ -435,6 +485,10 @@ export class Floorplan3DCard extends HTMLElement {
     return row;
   }
 }
+
+// extensions can reach everything from the element class, without importing by path:
+//   await customElements.whenDefined('floorplan-3d-card'); const Base = customElements.get('floorplan-3d-card');
+Object.assign(Floorplan3DCard, { THREE, FloorplanScene, normalizeConfig, buildPlan, VERSION });
 
 // ------------------------------------------------------------ small helpers
 function friendly(hass, id) {
@@ -473,7 +527,7 @@ if (!customElements.get('floorplan-3d-card')) {
     name: 'Floorplan 3D Card',
     description: 'Your home in 3D from a few lines of YAML: rooms, live lights, shutters and temperatures.',
     preview: false,
-    documentationURL: 'https://github.com/xT4nk/floorplan-3d-card',
+    documentationURL: 'https://github.com/xT4nk/HA-floorplan-3D-card',
   });
   console.info(`%c FLOORPLAN-3D-CARD %c ${VERSION} `, 'background:#ffb35c;color:#2a1606;font-weight:700', 'background:#222;color:#fff');
 }

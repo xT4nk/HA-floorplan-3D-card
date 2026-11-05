@@ -13,7 +13,6 @@ Describe the rooms and where the doors and windows are; the walls are built for 
   by default, nothing is drawn while the dashboard is in the background.
 - No build step, no external requests: Three.js is bundled.
 
-🇮🇹 [Leggi in italiano](README.it.md)
 
 ![Overview](docs/screenshot.png)
 ![Room](docs/screenshot-room.png)
@@ -64,7 +63,7 @@ How walls are made: every room edge becomes a wall; where two rooms touch, the s
 | `rooms` | — | List of rooms (required), see below |
 | `openings` | `[]` | Doors, windows, open passages |
 | `height` | `480px` | Card height (any CSS length: `70vh`, `calc(100vh - 56px)`) |
-| `theme` | `auto` | `auto` follows Home Assistant's dark mode, or `dark` / `light` |
+| `theme` | `auto` | `auto` follows Home Assistant's dark mode, `sun` is dark after sunset (`sun.sun`), or `dark` / `light` |
 | `auto_rotate` | `false` | Slow rotation of the overview; pauses for 45 s after you touch it |
 | `labels` | `true` | Room names and temperatures floating over the rooms |
 | `wall_thickness` | `12` | cm |
@@ -78,14 +77,16 @@ How walls are made: every room edge becomes a wall; where two rooms touch, the s
 |---|---|
 | `id` | Unique id (defaults to `area`) |
 | `rect` **or** `points` | `[x, y, width, depth]` or a polygon `[[x, y], …]` |
-| `area` | Home Assistant area id: its entities fill the panel, its lights make the glow, its first temperature/humidity sensors make the label |
+| `area` | Home Assistant area id: its entities fill the panel, its lights make the glow, its temperature/humidity sensors make the label |
 | `name` | Label (defaults to the area name) |
 | `floor` | `wood`, `wood2`, `tile`, `carpet`, `concrete`, `stone`, `dark` or a colour `'#a08060'` |
 | `entities` | Explicit panel list (replaces the area's) |
 | `exclude_entities` | Entities of the area to leave out |
 | `lights` | Lights that make the glow (default: the area's lights) |
-| `temperature` / `humidity` | Sensors for the label (default: the area's first ones) |
+| `temperature` / `humidity` | Sensors for the label; `false` shows none. Default: the sensors chosen for the area in Home Assistant (*Settings → Areas*), else the area's first ones |
 | `walls: false` | No walls (balcony, terrace, open space shown as a floor) |
+| `railing: true` | With `walls: false`: a railing on the edges that do not touch another room |
+| `part_of` | Id of another room this one belongs to (a balcony of the living room): a tap opens that room, and this one stays visible with it |
 | `label: [x, y]` | Where to put the label, if the automatic spot is not good |
 | `disabled: true` | Not clickable |
 
@@ -107,6 +108,9 @@ python3 -m http.server      # from the repo root
 ```
 A fake Home Assistant feeds the demo apartment; the buttons flip lights, shutters and sensors.
 
+## Roadmap
+What is done and what comes next: [ROADMAP.md](ROADMAP.md). Changes of each version: [CHANGELOG.md](CHANGELOG.md).
+
 ## Extending
 The card is a class you can extend: your own panel, popups, objects in the scene, extra overlays.
 See [docs/EXTENDING.md](docs/EXTENDING.md).
@@ -117,6 +121,8 @@ See [docs/EXTENDING.md](docs/EXTENDING.md).
 - **Empty panel**: the room has no `area`, or the area has no entities (entities can get their area from
   their device). Use `entities:` to list them by hand.
 - **No glow**: the glow comes from the `light.*` entities of the area (or `lights:`).
+- **Wrong temperature on a room** (e.g. the oven's): choose the room sensor for the area in Home Assistant
+  (*Settings → Areas*), set `temperature:` on the room, or `temperature: false`.
 - **Blank card**: the browser has no WebGL (very old tablets). The error is shown at the bottom of the card.
 
 ## Development
@@ -126,5 +132,10 @@ for f in dist/floorplan-*.js; do node --check "$f"; done
 ```
 
 ## License
-MIT — see [LICENSE](LICENSE). Bundles [Three.js](https://threejs.org/) r128 (`dist/three.module.js`),
-© 2010-2021 Three.js Authors, MIT License.
+Copyright © 2026 xT4nk. Licensed under the **GNU General Public License v3.0 or later** — see
+[LICENSE](LICENSE). You can use, study, change and share the card freely; if you distribute it or a modified
+version, you must do so under the same license, with the source code. Versions up to 0.1.0 were released
+under the MIT license.
+
+Bundles [Three.js](https://threejs.org/) r128 (`dist/three.module.js`), © 2010-2021 Three.js Authors, under
+its own MIT license — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

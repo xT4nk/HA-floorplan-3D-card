@@ -26,6 +26,14 @@ const MAX_ROOM_LIGHTS = 12;   // point lights cost shader time on tablets: above
 const GHOST_OPACITY = 0.12;
 const IDLE_RESUME_MS = 45000;
 
+/** Free area of a w×h view once the inset {left, right, top, bottom} (px) is
+ *  covered, and the view offset that centres the plan in it. Pure, exported for tests. */
+export function insetView(w, h, inset) {
+  const i = inset || {};
+  const L = i.left || 0, R = i.right || 0, T = i.top || 0, B = i.bottom || 0;
+  return { wa: Math.max(80, w - L - R), ha: Math.max(80, h - T - B), x: (R - L) / 2, y: (B - T) / 2 };
+}
+
 export class FloorplanScene {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -82,13 +90,23 @@ export class FloorplanScene {
     this.invalidate();
   }
 
-  /** Space covered by the card's side panel, so the plan is framed in the free area. */
-  setInset(inset) { this._inset = inset; this._applyInset(); this.invalidate(); }
+  /** Space covered by panels/overlays, {left, right, top, bottom} in px (null = none):
+   *  the plan is framed and centred in the free area. */
+  setInset(inset) {
+    const key = JSON.stringify(inset || null);
+    if (key === this._insetKey) return;
+    this._insetKey = key;
+    this._inset = inset;
+    this._applyInset();
+    // overview untouched by the user: re-frame now (a room fly computes its own radius)
+    if (!this._userMoved && !this._fly && !this.focused) { this._radius = this._homeRadius(); this._updateCamera(); }
+    this.invalidate();
+  }
 
   /** Camera distance that fits a plan of size S (cm) in the free part of the card. */
   _fit(S) {
-    const w = this._w || 800, h = this._h || 500, i = this._inset || {};
-    const wa = Math.max(80, w - (i.left || 0)), ha = Math.max(80, h - (i.top || 0));
+    const w = this._w || 800, h = this._h || 500;
+    const { wa, ha } = insetView(w, h, this._inset);
     const tv = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)), th = tv * (w / h);
     return Math.max(S / (2 * tv) * (h / ha), S / (2 * th) * (w / wa));
   }
@@ -236,9 +254,12 @@ export class FloorplanScene {
     this.glassOpenMat = this._keep(new THREE.MeshStandardMaterial({ color: 0xffb35c, transparent: true,
       opacity: 0.55, roughness: 0.2, emissive: 0x7a3d00 }));
 
+    this._parentOf = {};
+    for (const R of this.model.rooms) if (R.part_of) this._parentOf[R.id] = R.part_of;
     this._buildRooms(O);
     this._buildWalls(O);
     this._buildOpenings(O);
+    this._buildRailings(O);
 
     // camera: orbit around the plan centre
     this._home = { theta: -0.62, phi: 0.92, ty: 30 };
@@ -250,7 +271,14 @@ export class FloorplanScene {
   }
 
   _keep(x) { this._disposables.push(x); return x; }
-  _tag(mesh, rooms) { mesh.userData.rooms = new Set(rooms); this._tagged.push(mesh); }
+  /** Marks a mesh as belonging to rooms (for ghosting); a room that is part_of
+   *  another one also belongs to that one, so it stays visible with it. */
+  _tag(mesh, rooms) {
+    const set = new Set(rooms);
+    for (const id of rooms) { const p = this._parentOf && this._parentOf[id]; if (p) set.add(p); }
+    mesh.userData.rooms = set;
+    this._tagged.push(mesh);
+  }
 
   _box(w, h, d, mat) {
     const m = new THREE.Mesh(this._keep(new THREE.BoxGeometry(w, h, d)), mat);
@@ -398,6 +426,17 @@ export class FloorplanScene {
     }
   }
 
+  _buildRailings(O) {
+    const rails = this.plan.railings || [];
+    if (!rails.length) return;
+    const mat = this._keep(new THREE.MeshStandardMaterial({ color: 0x5b6470, roughness: 0.6, metalness: 0.3 }));
+    const h = Math.round(O.wall_height * 0.43);
+    for (const R of rails) {
+      const m = this._place(this._box(R.length, h, 4, mat), R.center, R.angle, O.floor_height + h / 2);
+      this._tag(m, R.rooms);
+    }
+  }
+
   // ------------------------------------------------------------ focus / ghosts
   _ghostOf(m) {
     let g = this._ghosts.get(m);
@@ -417,7 +456,7 @@ export class FloorplanScene {
       }
     }
     for (const [rid, r] of Object.entries(this.rooms)) {
-      const vis = !id || rid === id;
+      const vis = !id || rid === id || r.data.part_of === id;
       if (r.lamp) r.lamp.visible = vis;
       if (r.label) r.label.visible = vis;
     }
@@ -434,9 +473,10 @@ export class FloorplanScene {
   }
 
   _applyInset() {
-    const w = this._w, h = this._h, i = this._inset;
+    const w = this._w, h = this._h;
     if (!w || !h) return;
-    if (i && (i.left || i.top)) this.camera.setViewOffset(w, h, -(i.left || 0) / 2, (i.top || 0) / 2, w, h);
+    const v = insetView(w, h, this._inset);
+    if (v.x || v.y) this.camera.setViewOffset(w, h, v.x, v.y, w, h);
     else if (this.camera.view && this.camera.view.enabled) this.camera.clearViewOffset();
   }
 

@@ -14,7 +14,8 @@ rooms:
     area: office
     points: [[580, 420], [820, 420], [820, 760], [580, 760]]   # any polygon works
     floor: carpet
-  - { id: balcony, name: Balcony, rect: [-140, 60, 140, 300], floor: concrete, walls: false }
+  - { id: balcony, name: Balcony, rect: [-140, 60, 140, 300], floor: concrete, walls: false,
+      railing: true, part_of: living }   # tap opens the living room, railing on the free sides
 openings:
   - { type: opening, from: [520, 40], to: [520, 220] }              # open kitchen, no wall
   - { type: door, at: [520, 340], width: 90 }

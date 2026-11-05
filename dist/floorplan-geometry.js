@@ -146,10 +146,21 @@ export function normalizeConfig(config) {
       exclude: Array.isArray(r.exclude_entities) ? r.exclude_entities : [],
       lights: Array.isArray(r.lights) ? r.lights : null,
       temperature: r.temperature ?? null,
+      humidity: r.humidity ?? null,
       walls: r.walls !== false,                        // walls: false → open area (terrace, balcony)
+      railing: r.railing === true,                     // railing on the free edges of an open area
+      part_of: r.part_of != null ? String(r.part_of) : null,   // tap/focus go to that room
+      disabled: r.disabled === true,
       raw: r,
     };
   });
+  for (const r of rooms) {
+    if (r.railing && r.walls) fail(`room "${r.id}": "railing: true" needs "walls: false"`);
+    if (r.part_of === null) continue;
+    const parent = rooms.find(q => q.id === r.part_of);
+    if (!parent || parent === r) fail(`room "${r.id}": "part_of" must be the id of another room`);
+    if (parent.part_of) fail(`room "${r.id}": "part_of" must point to a room that is not itself part of another`);
+  }
 
   const openings = (config.openings || []).map((o, i) => {
     if (!o || typeof o !== 'object') fail(`openings[${i}] must be an object`);
@@ -267,7 +278,45 @@ function placeOpening(op, lines, rooms, opt) {
   return { ...op, line: best.line, t0: best.t0, t1: best.t1, out, rooms: roomIds };
 }
 
-/* Main entry: the list of wall boxes to draw and the placed openings.
+/* Railings of open areas (railing: true): every edge of the room minus the
+ * parts it shares with another room. Segment: { a, b, length, center, angle, rooms[] } */
+function railings(rooms) {
+  const out = [];
+  for (const room of rooms.filter(r => r.railing)) {
+    const P = room.poly;
+    for (let i = 0; i < P.length; i++) {
+      const p = P[i], q = P[(i + 1) % P.length];
+      const L = len(sub(q, p));
+      if (L < EPS) continue;
+      const d = [(q[0] - p[0]) / L, (q[1] - p[1]) / L], n = [-d[1], d[0]], c = dot(n, p);
+      // parts of this edge covered by edges of other rooms on the same line
+      const cover = [];
+      for (const other of rooms) {
+        if (other === room) continue;
+        const Q = other.poly;
+        for (let j = 0; j < Q.length; j++) {
+          const u = Q[j], v = Q[(j + 1) % Q.length];
+          if (Math.abs(dot(n, u) - c) > LINE_EPS || Math.abs(dot(n, v) - c) > LINE_EPS) continue;
+          const a = dot(d, sub(u, p)), b = dot(d, sub(v, p));
+          cover.push([Math.max(0, Math.min(a, b)), Math.min(L, Math.max(a, b))]);
+        }
+      }
+      cover.sort((x, y) => x[0] - y[0]);
+      let t = 0;
+      const free = [];
+      for (const [a, b] of cover) { if (b <= a) continue; if (a > t + EPS) free.push([t, a]); t = Math.max(t, b); }
+      if (L > t + EPS) free.push([t, L]);
+      for (const [t0, t1] of free) {
+        const a = [p[0] + d[0] * t0, p[1] + d[1] * t0], b = [p[0] + d[0] * t1, p[1] + d[1] * t1];
+        out.push({ a, b, length: t1 - t0, center: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+          angle: Math.atan2(d[1], d[0]), rooms: [room.id] });
+      }
+    }
+  }
+  return out;
+}
+
+/* Main entry: the list of wall boxes to draw, the placed openings and the railings.
  * Wall piece: { a, b (plan points), length, angle, y0, y1, rooms[], kind }
  * kind: 'wall' (full height) | 'sill' (under a window). */
 export function buildPlan(model) {
@@ -316,7 +365,7 @@ export function buildPlan(model) {
       rooms: o.rooms,
     };
   });
-  return { walls, openings: placed };
+  return { walls, openings: placed, railings: railings(model.rooms) };
 }
 
 function wallBox(line, t0, t1, y0, y1, rooms, kind) {

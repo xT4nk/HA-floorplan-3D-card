@@ -10,17 +10,16 @@ integration, and you configure them in YAML.
 
 ## Done
 
-| Version | What it brought |
+| Version | Content |
 |---|---|
 | 0.1.0 | The 3D plan from a few lines of YAML: walls built from the rooms, doors and windows, live lights, shutters and temperatures, tap a room to zoom in and list its area's entities |
-
+| 0.2.0 |`theme: sun`; rooms that belong to another one (`part_of`: a balcony opens the living room) and railings for open areas; the room temperature uses the sensor chosen for the area in home assistant; hooks for extensions |
 ## Next
 
 The device tiles and popups will come in the 0.4 series, one group per release.
 
-| Version | Status | Planned |
+| Version | Status | Content |
 |---|---|---|
-| 0.2.0 | To be released | `theme: sun`; rooms that belong to another one (`part_of`: a balcony opens the living room) and railings for open areas; the room temperature uses the sensor chosen for the area in Home Assistant; hooks for extensions |
 | 0.3.0 | Ready | The room panel in sections: sensor chips at the top, entities grouped by domain, one switch for all the lights of the room; `sections` option to rename and reorder them |
 | 0.4.0 | In testing | The card's own tiles and popups for **lights** and **covers**: brightness, colour temperature, colour wheel, shutter dragged to a position, instant response to taps, warnings for low battery or unavailable devices; `light_groups`; `tiles: native` to keep Home Assistant's tile cards |
 | 0.4.1 | In testing | Tiles and popups for **climate** (dial for the target temperature, modes, fan, swing, filter hours, back on in the last mode) and **switches** |

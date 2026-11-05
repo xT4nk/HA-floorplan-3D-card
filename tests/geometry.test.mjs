@@ -93,3 +93,33 @@ test('demo plan: builds, every opening placed, open kitchen has no wall', () => 
   // bathroom door is interior (two rooms)
   assert.deepEqual(openings.find(o => near(o.center[0], 550)).rooms.sort(), ['bathroom', 'hall']);
 });
+
+test('railing: free edges of an open area, not the edge it shares with a room', () => {
+  const { railings } = plan(DEMO_PLAN);
+  // demo balcony [-140, 60, 140, 300] leans on the living room along x = 0
+  assert.equal(railings.length, 3);
+  assert.ok(railings.every(r => r.rooms.join() === 'balcony'));
+  assert.ok(near(railings.reduce((s, r) => s + r.length, 0), 140 + 300 + 140));
+  assert.ok(!railings.some(r => near(r.a[0], 0) && near(r.b[0], 0)), 'no railing on the shared edge');
+});
+
+test('railing: edge shared only in part leaves two pieces', () => {
+  const { railings } = plan({ rooms: [
+    { id: 'in', rect: [0, 100, 300, 100] },
+    { id: 'terrace', rect: [0, 0, 300, 400], walls: false, railing: true },
+  ] });
+  // rooms must not overlap in real plans; here only the edge logic matters: x = 0 is shared 100..200
+  const left = railings.filter(r => near(r.a[0], 0) && near(r.b[0], 0));
+  assert.deepEqual(left.map(r => Math.round(r.length)).sort((a, b) => a - b), [100, 200]);
+});
+
+test('part_of and railing are validated', () => {
+  assert.throws(() => normalizeConfig({ rooms: [{ id: 'a', rect: [0, 0, 100, 100], railing: true }] }), /needs "walls: false"/);
+  assert.throws(() => normalizeConfig({ rooms: [{ id: 'a', rect: [0, 0, 100, 100], part_of: 'x' }] }), /another room/);
+  assert.throws(() => normalizeConfig({ rooms: [{ id: 'a', rect: [0, 0, 100, 100], part_of: 'a' }] }), /another room/);
+  assert.throws(() => normalizeConfig({ rooms: [
+    { id: 'a', rect: [0, 0, 100, 100] }, { id: 'b', rect: [100, 0, 100, 100], part_of: 'a' },
+    { id: 'c', rect: [200, 0, 100, 100], part_of: 'b' }] }), /not itself part of another/);
+  const m = normalizeConfig(DEMO_PLAN);
+  assert.equal(m.rooms.find(r => r.id === 'balcony').part_of, 'living');
+});
