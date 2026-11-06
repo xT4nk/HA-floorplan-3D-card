@@ -5,8 +5,9 @@ Describe the rooms and where the doors and windows are; the walls are built for 
 
 - **Live**: lights glow in their room (colour and brightness), roller shutters follow the covers,
   open windows turn amber, each room shows its temperature and humidity.
-- **Tap a room**: the camera flies in, the other rooms fade out, and a side panel lists the entities of
-  that room's Home Assistant **area** as native tile cards.
+- **Tap a room**: the camera flies in, the other rooms fade out, and a side panel shows that room's Home
+  Assistant **area**: temperature, humidity and motion as chips, the rest as native tile cards grouped in
+  sections (Lights, Covers, Climate…), with one switch for all the lights of the room.
 - **Tap a window**: more-info of its cover (or contact sensor).
 - Drag to rotate, pinch or scroll to zoom, two fingers or right-drag to pan.
 - Light on resources: frames are drawn only when something changes (no render loop), auto-rotation is off
@@ -71,6 +72,7 @@ How walls are made: every room edge becomes a wall; where two rooms touch, the s
 | `floor_height` | `10` | Visual thickness of the floor |
 | `sill` | `45` | Default window sill, on the `wall_height` scale |
 | `door_width` / `window_width` | `80` / `120` | Defaults when `width` is omitted |
+| `sections` | Lights, Covers, Climate, Media, Vacuum, Other, Sensors | Sections of the room panel: `- { name: Luci, domains: [light] }`. Rename them, reorder them, merge domains; entities of a domain in no section are not shown |
 
 ### Room options
 | Option | Description |

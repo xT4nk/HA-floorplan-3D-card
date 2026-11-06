@@ -2,6 +2,22 @@
 
 What comes next: [ROADMAP.md](ROADMAP.md).
 
+## 0.3.0
+New
+- Room panel in sections: environment sensors (temperature, humidity, illuminance, motion, doors and windows,
+  leaks) as chips at the top, the rest as native tile cards grouped by domain, two columns (one on narrow
+  cards), with the tile features of each domain (brightness, open/close, target temperature…).
+- One switch in the Lights header turns all the lights of the room on or off.
+- `sections` option: names, order and domains of the panel sections (e.g. in your language).
+- States in the panel are formatted by Home Assistant (`hass.formatEntityState`): translated, with units.
+- Extensions: hooks `isPanelChip(id)`, `renderPanelTop(room)`, `createPanelTile(id, room)`, `getText(key)`; helper
+  `refreshPanel()`.
+
+Changed
+- The default panel looks different (chips and sections instead of one grid of tiles); `renderRoomPanel`
+  still replaces it entirely.
+- On narrow cards the bottom panel sizes to its content (up to 52% of the card).
+
 ## 0.2.0
 License
 - From this version the card is licensed under the **GNU GPL v3.0 or later** (it was MIT). You can still use,

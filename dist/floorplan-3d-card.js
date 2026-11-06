@@ -17,18 +17,45 @@
  * modules after an update (HACS versions only this file's URL). Bump VERSION
  * and every ?v= together; tests/release.test.mjs checks it.
  */
-import { normalizeConfig, buildPlan } from './floorplan-geometry.js?v=0.2.0';
-import { FloorplanScene, THREE } from './floorplan-scene.js?v=0.2.0';
-import { DEMO_PLAN } from './floorplan-demo.js?v=0.2.0';
+import { normalizeConfig, buildPlan } from './floorplan-geometry.js?v=0.3.0';
+import { FloorplanScene, THREE } from './floorplan-scene.js?v=0.3.0';
+import { DEMO_PLAN } from './floorplan-demo.js?v=0.3.0';
 
 export { THREE, FloorplanScene, normalizeConfig, buildPlan };
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 
 const DOMAIN_ORDER = ['light', 'climate', 'cover', 'fan', 'media_player', 'switch', 'vacuum', 'lock',
   'humidifier', 'water_heater', 'sensor', 'binary_sensor', 'camera', 'scene', 'script', 'button'];
 const PANEL_SKIP = new Set(['automation', 'update', 'device_tracker', 'person', 'zone', 'event', 'tts', 'stt',
   'conversation', 'wake_word', 'assist_satellite', 'image', 'todo', 'calendar', 'notify', 'text', 'select', 'number']);
 const WARM = [255, 179, 92];
+// default room panel: environment sensors as chips, the rest as tiles grouped in sections
+const DEFAULT_SECTIONS = [
+  { name: 'Lights', domains: ['light'] },
+  { name: 'Covers', domains: ['cover'] },
+  { name: 'Climate', domains: ['climate', 'fan', 'humidifier', 'water_heater'] },
+  { name: 'Media', domains: ['media_player'] },
+  { name: 'Vacuum', domains: ['vacuum'] },
+  { name: 'Other', domains: ['switch', 'lock', 'camera', 'scene', 'script', 'button'] },
+  { name: 'Sensors', domains: ['sensor', 'binary_sensor'] },
+];
+const CHIP_CLASSES = { sensor: ['temperature', 'humidity', 'illuminance'],
+  binary_sensor: ['motion', 'occupancy', 'door', 'window', 'moisture'] };
+const TILE_FEATURES = {
+  light: [{ type: 'light-brightness' }],
+  cover: [{ type: 'cover-open-close' }],
+  climate: [{ type: 'target-temperature' }],
+  vacuum: [{ type: 'vacuum-commands', commands: ['start_pause', 'return_home'] }],
+  fan: [{ type: 'fan-speed' }],
+};
+const TEXT = {
+  no_entities: 'No entities in this area.',
+  no_area: 'Set "area" (or "entities") for this room to list its devices.',
+  all_lights: 'All lights of the room',
+};
+const WIDE_DOMAINS = new Set(['cover', 'climate', 'vacuum']);
+const ON_STATES = new Set(['on', 'open', 'opening', 'playing', 'cleaning', 'returning',
+  'heat', 'cool', 'heat_cool', 'auto', 'fan_only', 'dry', 'unlocked']);
 const MOBILE_W = 640;
 
 const CSS = `
@@ -47,25 +74,47 @@ const CSS = `
     -webkit-backdrop-filter:blur(10px);display:inline-flex;align-items:center;gap:6px}
   .btn:hover{border-color:rgba(255,255,255,.2)}
   .btn ha-icon{--mdc-icon-size:18px}
-  #panel{display:none;flex-direction:column;position:absolute;z-index:6;top:0;bottom:0;left:0;width:min(400px,46%);
-    background:linear-gradient(to right,rgba(10,14,19,.86) calc(100% - 56px),rgba(10,14,19,0));
+  #panel{display:none;flex-direction:column;position:absolute;z-index:6;top:0;bottom:0;left:0;width:min(460px,48%);
+    background:linear-gradient(to right,rgba(10,14,19,.84) calc(100% - 64px),rgba(10,14,19,0));
     --ha-card-background:rgba(255,255,255,.05);--card-background-color:rgba(255,255,255,.05);
     --ha-card-border-color:var(--fp-line);--ha-card-border-radius:14px;
     --primary-text-color:#e8e4dc;--secondary-text-color:var(--fp-dim)}
   #wrap.room #panel{display:flex}
-  #wrap.mobile #panel{top:auto;right:0;width:auto;height:52%;
-    background:rgba(10,14,19,.9);border-top:1px solid var(--fp-line);border-radius:18px 18px 0 0;
-    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
-  #pHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:18px 44px 8px 20px}
-  #wrap.mobile #pHead{padding-right:20px}
-  #pName{font-size:22px;font-weight:650}
+  #wrap.mobile #panel{top:auto;right:0;width:auto;max-height:52%;padding-top:6px;
+    background:linear-gradient(to top,rgba(10,14,19,.9) calc(100% - 48px),rgba(10,14,19,0))}
+  #pHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:20px 28px 8px 22px}
+  #pName{font-size:24px;font-weight:650;letter-spacing:.01em}
   #pMeta{font-size:11px;color:var(--fp-dim);letter-spacing:.14em;text-transform:uppercase;margin-top:4px}
-  #pClose{flex:none;width:34px;height:34px;padding:0;justify-content:center}
-  #pList{flex:1;overflow-y:auto;padding:6px 44px 18px 18px;display:grid;gap:8px;align-content:start;
-    grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-  #wrap.mobile #pList{padding-right:18px}
-  #pList .wide{grid-column:1/-1}
-  .empty{color:var(--fp-dim);font-size:13px;grid-column:1/-1;padding:6px 2px}
+  #pMeta:empty{display:none}
+  #pClose{flex:none;width:34px;height:34px;padding:0;justify-content:center;border-radius:50%;
+    background:rgba(255,255,255,.04);color:var(--fp-dim);font-size:15px}
+  #pChips{display:flex;flex-wrap:wrap;gap:8px;padding:8px 28px 2px 22px}
+  #pChips:empty{display:none}
+  #pList{flex:1;overflow-y:auto;padding:6px 28px 16px 22px;overscroll-behavior:contain;scrollbar-width:none}
+  #pList::-webkit-scrollbar{display:none}
+  .chip{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;color:#e8e4dc;
+    background:rgba(255,255,255,.07);border:1px solid var(--fp-line);border-radius:999px;
+    padding:8px 13px;cursor:pointer;white-space:nowrap}
+  .chip ha-state-icon{--mdc-icon-size:18px;color:var(--fp-dim)}
+  .chip.on ha-state-icon{color:var(--fp-accent)}
+  .sec{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11.5px;font-weight:600;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--fp-dim);padding:14px 6px 8px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .grid > *{min-width:0}
+  .grid .wide,.grid .row{grid-column:1 / -1}
+  #wrap.mobile .grid{grid-template-columns:1fr}
+  .gtog{position:relative;width:40px;height:22px;flex:none;cursor:pointer;display:inline-block}
+  .gtog input{opacity:0;width:0;height:0;position:absolute}
+  .gtog .kn{position:absolute;inset:0;background:#3a4350;border-radius:999px;transition:background .2s}
+  .gtog .kn::after{content:'';position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+    background:#cfd6de;transition:transform .2s}
+  .gtog input:checked + .kn{background:var(--fp-accent)}
+  .gtog input:checked + .kn::after{transform:translateX(18px)}
+  .gtog input:focus-visible + .kn{outline:2px solid var(--fp-accent);outline-offset:2px}
+  .fp-in{opacity:0;transform:translateY(14px);animation:fp-in .42s cubic-bezier(.22,.9,.32,1) forwards}
+  @keyframes fp-in{to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: reduce){ .fp-in{animation:none;opacity:1;transform:none} }
+  .empty{color:var(--fp-dim);font-size:12px;line-height:1.5;padding:14px 16px}
   .row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.05);
     border:1px solid var(--fp-line);font-size:13px;cursor:pointer;min-width:0}
   .row .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -83,6 +132,7 @@ const HTML = `
       <div id="panel" role="dialog" aria-labelledby="pName">
         <div id="pHead"><div><div id="pName"></div><div id="pMeta"></div></div>
           <button class="btn" id="pClose" aria-label="Close">✕</button></div>
+        <div id="pChips"></div>
         <div id="pList"></div>
       </div>
       <div id="err"></div>
@@ -95,7 +145,9 @@ export class Floorplan3DCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._hass = null;
     this._room = null;
-    this._tiles = new Map();      // entity_id → tile element of the open panel
+    this._panelLive = [];         // elements of the open panel that get every hass update
+    this._panelSeq = 0;           // bumped on every panel change (async renders check it)
+    this._enterN = 0;             // entry-animation counter of the open panel
     this._applied = {};           // last values pushed to the scene (avoid redundant work)
   }
 
@@ -109,6 +161,9 @@ export class Floorplan3DCard extends HTMLElement {
     const plan = buildPlan(model);
     if (config.theme && !['auto', 'sun', 'dark', 'light'].includes(config.theme))
       throw new Error('floorplan-3d-card: "theme" must be auto, sun, dark or light');
+    if (config.sections !== undefined && (!Array.isArray(config.sections) || config.sections.some(sec =>
+      !sec || typeof sec.name !== 'string' || !Array.isArray(sec.domains) || !sec.domains.length)))
+      throw new Error('floorplan-3d-card: "sections" must be a list of { name, domains: [domain, …] }');
     this._config = config;
     this._model = model;
     this._plan = plan;
@@ -119,7 +174,7 @@ export class Floorplan3DCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (this._scene) this._sync();
-    for (const t of this._tiles.values()) t.hass = hass;
+    this.refreshPanel();
   }
   get hass() { return this._hass; }
 
@@ -338,28 +393,59 @@ export class Floorplan3DCard extends HTMLElement {
     return { glow, sub: parts.length ? parts.join(' · ') : null };
   }
 
-  /** HOOK: fill the room panel. Default: native tile cards (plain rows outside HA). */
+  /** HOOK: fill the room panel. Default: environment sensors as chips, then renderPanelTop(), then the
+   *  entities in sections (the `sections` option), each one from createPanelTile() or a native tile card. */
   async renderRoomPanel(room, list) {
+    const seq = this._panelSeq;
     const ids = this.getRoomEntities(room);
+    const chipIds = ids.filter(id => this.isPanelChip(id));
+    const chips = this.shadowRoot.getElementById('pChips');
+    for (const id of chipIds) chips.appendChild(this._panelAdd(this._chip(id)));
+    for (const el of this.renderPanelTop(room) || []) if (el) list.appendChild(this._panelAdd(el));
     if (!ids.length) {
-      list.innerHTML = `<div class="empty">${room.area ? 'No entities in this area.' : 'Set "area" (or "entities") for this room to list its devices.'}</div>`;
+      const p = document.createElement('div');
+      p.className = 'empty';
+      p.textContent = this.getText(room.area || room.entities ? 'no_entities' : 'no_area');
+      list.appendChild(p);
       return;
     }
-    const helpers = window.loadCardHelpers ? await window.loadCardHelpers().catch(() => null) : null;
-    if (this._room !== room.id) return;       // panel changed while loading
-    for (const id of ids) {
-      let el;
-      if (helpers) {
-        el = helpers.createCardElement({ type: 'tile', entity: id });
-        el.hass = this._hass;
-        if (['climate', 'media_player', 'cover'].includes(id.split('.')[0])) el.classList.add('wide');
-      } else {
-        el = this._plainRow(id);
+    const helpers = await this._cardHelpers();
+    if (seq !== this._panelSeq) return;       // the panel changed while loading
+    const rest = ids.filter(id => !chipIds.includes(id));
+    for (const sec of this._config.sections || DEFAULT_SECTIONS) {
+      const secIds = rest.filter(id => sec.domains.includes(id.split('.')[0]));
+      const head = secIds.length && this._sectionHead(sec, secIds);
+      const tiles = [];
+      for (const id of secIds) {
+        const t = this.createPanelTile(id, room);
+        if (t === false) continue;
+        tiles.push(t || this._nativeTile(id, helpers));
       }
-      this._tiles.set(id, el);
-      list.appendChild(el);
+      if (!tiles.length) continue;
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      list.appendChild(this._panelAdd(head));
+      for (const t of tiles) grid.appendChild(this._panelAdd(t));
+      list.appendChild(grid);
     }
   }
+
+  /** HOOK: true when an entity goes in the chips row at the top of the panel instead of a section.
+   *  Default: temperature, humidity and illuminance sensors; motion, occupancy, door, window, moisture. */
+  isPanelChip(id) {
+    const cls = CHIP_CLASSES[id.split('.')[0]];
+    return !!cls && cls.includes(deviceClass(this._hass, id));
+  }
+
+  /** HOOK: texts of the panel, by key: no_entities, no_area, all_lights (section names: `sections` option). */
+  getText(key) { return TEXT[key] || key; }
+
+  /** HOOK: elements placed above the sections (called first on every render). Default: none. */
+  renderPanelTop(room) { return []; }   // eslint-disable-line no-unused-vars
+
+  /** HOOK: the element for one entity of the panel: an element, null for the default tile card,
+   *  false to leave the entity out. An element with a `hass` setter gets every hass update. */
+  createPanelTile(id, room) { return null; }   // eslint-disable-line no-unused-vars
 
   /** HOOK: tap on a window or door. Default: more-info of its cover, else of its contact sensor. */
   onOpeningTap(opening) {
@@ -421,6 +507,13 @@ export class Floorplan3DCard extends HTMLElement {
     this.dispatchEvent(new CustomEvent('floorplan-room-changed', { detail: { room: this._room }, bubbles: true, composed: true }));
   }
 
+  /** Pushes the current hass to every live element of the open panel again (after a local change). */
+  refreshPanel() {
+    for (const el of this._panelLive) {
+      try { el.hass = this._hass; } catch (e) { console.error('floorplan-3d-card: panel update', e); }
+    }
+  }
+
   openMoreInfo(entityId) {
     this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
   }
@@ -447,11 +540,102 @@ export class Floorplan3DCard extends HTMLElement {
     this._closePanel();
     this._room = room.id;
     this.$wrap.classList.add('room');
-    this.shadowRoot.getElementById('pName').textContent = this.roomName(room);
+    const root = this.shadowRoot;
+    root.getElementById('pName').textContent = this.roomName(room);
     this._refreshPanelMeta();
-    const list = this.shadowRoot.getElementById('pList');
-    list.innerHTML = '';
-    Promise.resolve(this.renderRoomPanel(room, list)).catch(e => this._showError(e.message));
+    this._enterN = 0;
+    const head = root.getElementById('pHead');
+    head.classList.remove('fp-in');
+    void head.offsetWidth;                    // restart the entry animation on every room change
+    this._enter(head);
+    const list = root.getElementById('pList');
+    const seq = this._panelSeq;
+    Promise.resolve(this.renderRoomPanel(room, list))
+      .then(() => { if (seq === this._panelSeq) this.refreshInset(); })   // a bottom drawer sizes to its content
+      .catch(e => this._showError(e.message));
+  }
+
+  /** Registers a panel element: entry animation (a .grid tile by tile) and, with a `hass` setter, live updates. */
+  _panelAdd(el) {
+    if (el.classList && el.classList.contains('grid')) for (const c of el.children) this._enter(c);
+    else this._enter(el);
+    if ('hass' in el) {
+      this._panelLive.push(el);
+      if (this._hass) el.hass = this._hass;
+    }
+    return el;
+  }
+
+  _enter(el) {
+    if (!el.classList) return;
+    el.classList.add('fp-in');
+    el.style.animationDelay = (0.02 + Math.min(this._enterN++, 18) * 0.04).toFixed(2) + 's';
+  }
+
+  _cardHelpers() {
+    if (!this._helpers) this._helpers = window.loadCardHelpers ? window.loadCardHelpers().catch(() => null) : Promise.resolve(null);
+    return this._helpers;
+  }
+
+  _sectionHead(sec, ids) {
+    const head = document.createElement('div');
+    head.className = 'sec';
+    const t = document.createElement('span');
+    t.textContent = sec.name;
+    head.appendChild(t);
+    const lights = ids.filter(id => id.startsWith('light.'));
+    if (lights.length && lights.length === ids.length) {
+      // one switch for every light of the room
+      const lab = document.createElement('label');
+      lab.className = 'gtog';
+      lab.setAttribute('aria-label', this.getText('all_lights'));
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      const kn = document.createElement('span');
+      kn.className = 'kn';
+      lab.append(input, kn);
+      input.onchange = () => this._hass && this._hass.callService('light', input.checked ? 'turn_on' : 'turn_off', { entity_id: lights });
+      head.appendChild(lab);
+      Object.defineProperty(head, 'hass', { configurable: true, set: hass => {
+        input.checked = !!hass && lights.some(id => hass.states[id] && hass.states[id].state === 'on');
+      } });
+    }
+    return head;
+  }
+
+  _chip(id) {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    const icon = document.createElement('ha-state-icon');
+    const val = document.createElement('span');
+    chip.append(icon, val);
+    chip.onclick = () => this.openMoreInfo(id);
+    Object.defineProperty(chip, 'hass', { configurable: true, set: hass => {
+      const s = hass && hass.states[id];
+      if (!s) return;
+      icon.hass = hass;
+      icon.stateObj = s;
+      val.textContent = formatState(hass, s);
+      chip.classList.toggle('on', ON_STATES.has(s.state));
+    } });
+    return chip;
+  }
+
+  _nativeTile(id, helpers) {
+    const dom = id.split('.')[0];
+    if (helpers) {
+      try {
+        const cfg = { type: 'tile', entity: id };
+        if (TILE_FEATURES[dom]) cfg.features = TILE_FEATURES[dom];
+        const card = helpers.createCardElement(cfg);
+        const cell = document.createElement('div');
+        if (WIDE_DOMAINS.has(dom)) cell.className = 'wide';
+        cell.appendChild(card);
+        Object.defineProperty(cell, 'hass', { configurable: true, set: hass => { card.hass = hass; } });
+        return cell;
+      } catch (e) { /* plain row below */ }
+    }
+    return this._plainRow(id);
   }
 
   _refreshPanelMeta() {
@@ -463,10 +647,13 @@ export class Floorplan3DCard extends HTMLElement {
 
   _closePanel() {
     this._room = null;
-    this._tiles.clear();
+    this._panelSeq++;
+    this._panelLive = [];
     if (this.$wrap) this.$wrap.classList.remove('room');
-    const list = this.shadowRoot.getElementById('pList');
-    if (list) list.innerHTML = '';
+    for (const id of ['pList', 'pChips']) {
+      const el = this.shadowRoot.getElementById(id);
+      if (el) el.innerHTML = '';
+    }
   }
 
   _plainRow(id) {
@@ -476,12 +663,11 @@ export class Floorplan3DCard extends HTMLElement {
     const draw = hass => {
       const s = hass.states[id];
       row.querySelector('.n').textContent = friendly(hass, id);
-      row.querySelector('.s').textContent = s ? `${s.state}${s.attributes.unit_of_measurement ? ' ' + s.attributes.unit_of_measurement : ''}` : 'missing';
-      row.classList.toggle('on', !!s && ['on', 'open', 'heat', 'cool', 'playing'].includes(s.state));
+      row.querySelector('.s').textContent = s ? formatState(hass, s) : 'missing';
+      row.classList.toggle('on', !!s && ON_STATES.has(s.state));
     };
-    Object.defineProperty(row, 'hass', { set: draw });
+    Object.defineProperty(row, 'hass', { configurable: true, set: draw });
     row.onclick = () => this.openMoreInfo(id);
-    draw(this._hass);
     return row;
   }
 }
@@ -494,6 +680,12 @@ Object.assign(Floorplan3DCard, { THREE, FloorplanScene, normalizeConfig, buildPl
 function friendly(hass, id) {
   const s = hass.states[id];
   return (s && s.attributes.friendly_name) || id;
+}
+/** State as Home Assistant shows it (translated, with unit); raw state + unit outside HA. */
+function formatState(hass, s) {
+  try { if (hass.formatEntityState) return hass.formatEntityState(s); } catch (e) { /* raw below */ }
+  const u = s.attributes.unit_of_measurement;
+  return s.state + (u ? ' ' + u : '');
 }
 function deviceClass(hass, id) {
   const s = hass.states[id];

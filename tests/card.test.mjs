@@ -134,3 +134,137 @@ test('insetView: free area and centring offset on every side', () => {
   assert.deepEqual(insetView(1000, 600, { bottom: 300 }), { wa: 1000, ha: 300, x: 0, y: 150 });
   assert.deepEqual(insetView(1000, 600, { top: 100, bottom: 300 }), { wa: 1000, ha: 200, x: 0, y: 100 });
 });
+
+// ---------------------------------------------------------------- room panel (0.3.0)
+function panelHass() {
+  const h = fakeHass({ states: [
+    st('light.lamp', 'off'),
+    st('sensor.living_temperature', '21.4', { device_class: 'temperature', unit_of_measurement: '°C' }),
+    st('cover.living', 'open', { current_position: 100 }),
+    st('switch.fan', 'off'),
+    st('sensor.living_power', '40', { device_class: 'power', unit_of_measurement: 'W' }),
+  ] });
+  for (const id of ['light.lamp', 'sensor.living_temperature', 'cover.living', 'switch.fan', 'sensor.living_power'])
+    h.entities[id] = { entity_id: id, area_id: 'living_room' };
+  h.formatEntityState = s => `fmt:${s.state}`;
+  h.calls = [];
+  h.callService = (domain, service, data) => h.calls.push([domain, service, data]);
+  return h;
+}
+const tick = () => new Promise(r => setTimeout(r, 0));
+function withHelpers() {
+  const made = [];
+  window.loadCardHelpers = async () => ({ createCardElement(cfg) {
+    const e = document.createElement('hui-tile-card');
+    e.cfg = cfg;
+    Object.defineProperty(e, 'hass', { set(h) { e.got = h; } });
+    made.push(e);
+    return e;
+  } });
+  return made;
+}
+const sections = el => el.shadowRoot.getElementById('pList').querySelectorAll('.sec').map(s => s.firstElementChild.textContent);
+
+test('panel: chips for environment sensors, tiles in sections, native tile features', async () => {
+  const made = withHelpers();
+  const el = mount();
+  el.hass = panelHass();
+  el.selectRoom('living');
+  await tick(); await tick();
+  const chips = el.shadowRoot.getElementById('pChips').querySelectorAll('.chip');
+  assert.equal(chips.length, 1);
+  assert.equal(chips[0].textContent, 'fmt:21.4');                  // translated by Home Assistant
+  assert.deepEqual(sections(el), ['Lights', 'Covers', 'Other', 'Sensors']);
+  const ent = made.map(e => e.cfg.entity);
+  assert.ok(!ent.includes('sensor.living_temperature'));           // a chip, not a tile
+  assert.deepEqual(made.find(e => e.cfg.entity === 'cover.living').cfg.features, [{ type: 'cover-open-close' }]);
+  assert.ok(made.find(e => e.cfg.entity === 'cover.living').parentNode.classList.contains('wide'));
+  assert.ok(made.every(e => e.got));                                 // every tile got hass
+  delete window.loadCardHelpers;
+});
+
+test('panel: one switch for all the lights of the room', async () => {
+  withHelpers();
+  const el = mount();
+  const h = panelHass();
+  el.hass = h;
+  el.selectRoom('living');
+  await tick(); await tick();
+  const input = el.shadowRoot.querySelector('.gtog input');
+  assert.equal(input.checked, true);                                 // light.living is on
+  input.checked = false; input.onchange();
+  assert.deepEqual(h.calls.pop(), ['light', 'turn_off', { entity_id: ['light.lamp', 'light.living'] }]);
+  const h2 = panelHass();
+  h2.states['light.living'].state = 'off';
+  el.hass = h2;
+  assert.equal(input.checked, false);
+  delete window.loadCardHelpers;
+});
+
+test('panel: sections option, renderPanelTop and createPanelTile hooks', async () => {
+  withHelpers();
+  const seen = [];
+  class Custom extends Floorplan3DCard {
+    renderPanelTop() {
+      const top = document.createElement('div');
+      top.className = 'top';
+      Object.defineProperty(top, 'hass', { set: h => { top.textContent = h.states['light.living'].state; } });
+      return [top];
+    }
+    createPanelTile(id) {
+      seen.push(id);
+      if (id === 'switch.fan') return false;                         // left out
+      if (id !== 'light.lamp') return null;                          // default tile
+      const t = document.createElement('div'); t.className = 'mine';
+      Object.defineProperty(t, 'hass', { set: h => { t.textContent = h.states[id].state; } });
+      return t;
+    }
+  }
+  const el = mount(Custom, { sections: [{ name: 'Luci', domains: ['light'] }, { name: 'Altro', domains: ['switch'] }] });
+  el.hass = panelHass();
+  el.selectRoom('living');
+  await tick(); await tick();
+  const list = el.shadowRoot.getElementById('pList');
+  assert.deepEqual(sections(el), ['Luci']);                          // 'Altro' is empty once switch.fan is left out
+  assert.equal(list.firstElementChild.className.split(' ')[0], 'top');
+  assert.equal(list.querySelector('.top').textContent, 'on');
+  assert.equal(list.querySelector('.mine').textContent, 'off');
+  assert.ok(!seen.includes('cover.living'));                         // not in any section: not shown
+  const h = panelHass(); h.states['light.lamp'].state = 'on';
+  el.hass = h;
+  assert.equal(list.querySelector('.mine').textContent, 'on');       // live
+  assert.throws(() => mount(Floorplan3DCard, { sections: [{ name: 'x' }] }), /sections/);
+  delete window.loadCardHelpers;
+});
+
+test('panel: a late render of a room left meanwhile is dropped', async () => {
+  withHelpers();
+  const el = mount();
+  el.hass = panelHass();
+  el.selectRoom('living');
+  el.selectRoom('kitchen');                                          // before the helpers resolve
+  await tick(); await tick();
+  assert.equal(el._room, 'kitchen');
+  assert.ok(!sections(el).includes('Lights'));
+  assert.ok(!sections(el).includes('Covers'));
+  delete window.loadCardHelpers;
+});
+
+test('panel: plain rows outside Home Assistant', async () => {
+  const el = mount();
+  el.hass = panelHass();
+  el.selectRoom('living');
+  await tick(); await tick();
+  const rows = el.shadowRoot.getElementById('pList').querySelectorAll('.row');
+  assert.ok(rows.length >= 4);
+  assert.ok(rows.every(r => r.querySelector('.s').textContent.startsWith('fmt:')));
+});
+
+test('panel: getText translates the panel texts', async () => {
+  class It extends Floorplan3DCard { getText(k) { return k === 'no_entities' ? 'Nessuna entità.' : super.getText(k); } }
+  const el = mount(It);
+  el.hass = panelHass();
+  el.selectRoom('bathroom');
+  await tick();
+  assert.equal(el.shadowRoot.querySelector('#pList .empty').textContent, 'Nessuna entità.');
+});

@@ -24,10 +24,25 @@ const Floorplan3DCard = customElements.get('floorplan-3d-card');
 const { THREE } = Floorplan3DCard;
 
 class MyHomeCard extends Floorplan3DCard {
-  // the panel: your own tiles/popups instead of the default tile cards
-  async renderRoomPanel(room, list) {
-    if (room.id !== 'kitchen') return super.renderRoomPanel(room, list);
-    list.innerHTML = '<div class="row wide">Oven, dishwasher…</div>';
+  // the panel: your own tile for some entities, the default tile card for the others
+  createPanelTile(id, room) {
+    if (!id.startsWith('light.')) return null;                     // null = default tile, false = leave it out
+    const tile = document.createElement('div');
+    tile.className = 'wide';                                       // full width of the 2-column grid
+    tile.onclick = () => this.openMoreInfo(id);
+    Object.defineProperty(tile, 'hass', { set: hass => {         // called on every hass update
+      tile.textContent = `${hass.states[id].attributes.friendly_name}: ${hass.formatEntityState(hass.states[id])}`;
+    } });
+    return tile;
+  }
+
+  // something above the sections of one room
+  renderPanelTop(room) {
+    if (room.id !== 'kitchen') return [];
+    const note = document.createElement('div');
+    note.className = 'sec';
+    note.textContent = 'Oven, dishwasher…';
+    return [note];
   }
 
   // tap on a window: your own popup
@@ -70,7 +85,11 @@ customElements.define('my-home-card', MyHomeCard);
 | `roomName(room)` | `name`, else the area name, else `id` | |
 | `getRoomEntities(room)` | entities of the area (or `entities:`), sorted by domain | used by the default panel |
 | `getRoomState(room)` | `{ glow: {intensity, color}, sub: "21.4° · 48%" }` | called on every `hass` update: keep it cheap |
-| `renderRoomPanel(room, list)` | native tile cards (plain rows outside HA) | may be `async`; check `this._room === room.id` after awaits |
+| `renderRoomPanel(room, list)` | chips, `renderPanelTop()`, then the sections of the `sections` option with `createPanelTile()` or native tile cards | override only to replace the whole panel; may be `async`; check `this._room === room.id` after awaits |
+| `isPanelChip(id)` | temperature, humidity, illuminance sensors; motion, occupancy, door, window, moisture | chips row at the top of the panel instead of a section |
+| `renderPanelTop(room)` | `[]` | elements above the sections; called first on every render. A `.grid` element is animated tile by tile |
+| `createPanelTile(id, room)` | `null` | an element for this entity, `null` for the native tile card, `false` to leave it out |
+| `getText(key)` | English | texts of the panel: `no_entities`, `no_area`, `all_lights` (section names come from the `sections` option) |
 | `onOpeningTap(opening)` | more-info of `cover`, else `contact` | `opening` has `id, type, name, cover, contact, rooms, center…` |
 | `getRoomMeta(room, state)` | `"16.6 m² · 21.4° · 48%"` | second line of the panel header; `''` hides it |
 | `getViewInset(roomId)` | the panel: `{left}`, or `{bottom}` on narrow cards; `null` in the overview | `{left, right, top, bottom}` in px covered over the 3D view; the plan is framed in the rest. Call `refreshInset()` when your overlays change size |
@@ -79,8 +98,13 @@ customElements.define('my-home-card', MyHomeCard);
 | `onHassUpdate(hass)` | — | after the scene has been updated |
 | `extraStyles()` | `''` | CSS added to the shadow root |
 
+Panel elements returned by the hooks get the current `hass` right away and on every update when they have a
+`hass` setter. Classes ready to use inside the panel: `sec` (section header), `grid` (two columns, one on
+narrow cards), `wide` (full width in a grid), `chip`, `row`, `empty`.
+
 Helpers: `selectRoom(id | null)` (a `part_of` room opens its parent), `openMoreInfo(entityId)`,
-`areaEntities(room)` (entity ids of the room's area, cached), `refreshInset()`, `isMobile`,
+`areaEntities(room)` (entity ids of the room's area, cached), `refreshInset()`, `refreshPanel()` (push `hass`
+to the panel elements again, after a local change), `isMobile`,
 `this.overlay` (layer over the canvas), `this.hass`. Event: `floorplan-room-changed` (`detail.room`).
 
 Names starting with `_` are internal and may change in any release; mixins can use them for their own
