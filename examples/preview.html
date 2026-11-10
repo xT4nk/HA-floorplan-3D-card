@@ -16,14 +16,41 @@
 <main>
   <h3 style="margin:4px 0">Floorplan 3D Card — preview without Home Assistant</h3>
   <div>Serve the repo root (<code>python3 -m http.server</code>) and open <code>/examples/preview.html</code>.
-    Query: <code>?room=living</code>, <code>?theme=light</code>, <code>?rotate=1</code>, <code>?height=700px</code>, <code>?bare=1</code>.</div>
+    Query: <code>?room=living</code>, <code>?popup=light.living_room</code>, <code>?theme=light</code>, <code>?rotate=1</code>,
+    <code>?height=700px</code>, <code>?bare=1</code>. Icons come from <code>@mdi/js</code> on a CDN (inside Home Assistant the card uses HA's own).</div>
   <div class="bar" id="bar"></div>
   <floorplan-3d-card id="card"></floorplan-3d-card>
   <div id="log"></div>
 </main>
 <script type="module">
-import '../dist/floorplan-3d-card.js';
-import { DEMO_PLAN } from '../dist/floorplan-demo.js';
+// ---- outside Home Assistant there are no ha-icon / ha-state-icon: small stand-ins that draw the
+//      Material Design icons from @mdi/js (only in this preview page)
+const MDI = import('https://cdn.jsdelivr.net/npm/@mdi/js@7.4.47/mdi.js').catch(() => ({}));
+const STATE_ICONS = { temperature: 'mdi:thermometer', humidity: 'mdi:water-percent', illuminance: 'mdi:brightness-5',
+  motion: 'mdi:motion-sensor', window: 'mdi:window-open-variant', door: 'mdi:door-open', moisture: 'mdi:water-alert' };
+class PreviewIcon extends HTMLElement {
+  static get observedAttributes() { return ['icon']; }
+  set icon(v) { this.setAttribute('icon', v); }
+  get icon() { return this.getAttribute('icon'); }
+  connectedCallback() { this._draw(); }
+  attributeChangedCallback() { this._draw(); }
+  async _draw() {
+    const m = await MDI, name = (this._name() || '').replace(/^mdi:/, '');
+    const d = m['mdi' + name.split('-').map(w => w[0].toUpperCase() + w.slice(1)).join('')];
+    const size = getComputedStyle(this).getPropertyValue('--mdc-icon-size').trim() || '24px';
+    Object.assign(this.style, { display: 'inline-flex', alignItems: 'center', justifyContent: 'center' });
+    this.innerHTML = d ? `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor"><path d="${d}"/></svg>` : '';
+  }
+  _name() { return this.icon; }
+}
+customElements.define('ha-icon', PreviewIcon);
+customElements.define('ha-state-icon', class extends PreviewIcon {
+  set stateObj(s) { this._s = s; this._draw(); }
+  _name() { const a = (this._s && this._s.attributes) || {}; return a.icon || STATE_ICONS[a.device_class] || 'mdi:eye'; }
+});
+
+await import('../dist/floorplan-3d-card.js');
+const { DEMO_PLAN } = await import('../dist/floorplan-demo.js');
 
 const q = new URLSearchParams(location.search);
 const log = m => { const el = document.getElementById('log'); el.textContent = `${m}\n` + el.textContent; };
@@ -33,11 +60,15 @@ const areas = { living_room: 'Living room', kitchen: 'Kitchen', hallway: 'Hall',
   bathroom: 'Bathroom', closet: 'Closet', office: 'Office' };
 const st = (state, attributes = {}) => ({ state, attributes, last_changed: new Date().toISOString() });
 const states = {
-  'light.living_room':   st('on',  { friendly_name: 'Ceiling light', brightness: 200, rgb_color: [255, 190, 120] }),
-  'light.floor_lamp':    st('off', { friendly_name: 'Floor lamp' }),
-  'light.kitchen':       st('off', { friendly_name: 'Kitchen light' }),
-  'light.bedroom':       st('on',  { friendly_name: 'Bedside lamp', brightness: 90, rgb_color: [120, 160, 255] }),
-  'light.office':        st('off', { friendly_name: 'Desk lamp' }),
+  // what each light can do (supported_color_modes) decides the controls of its tile and popup
+  'light.living_room':   st('on',  { friendly_name: 'Ceiling light', brightness: 200, color_mode: 'hs', hs_color: [31, 53],
+    rgb_color: [255, 190, 120], supported_color_modes: ['color_temp', 'hs'], min_color_temp_kelvin: 2200, max_color_temp_kelvin: 6500 }),
+  'light.floor_lamp':    st('off', { friendly_name: 'Floor lamp', supported_color_modes: ['color_temp'],
+    min_color_temp_kelvin: 2200, max_color_temp_kelvin: 4000 }),
+  'light.kitchen':       st('off', { friendly_name: 'Kitchen light', supported_color_modes: ['brightness'] }),
+  'light.bedroom':       st('on',  { friendly_name: 'Bedside lamp', brightness: 90, color_mode: 'hs', hs_color: [220, 53],
+    rgb_color: [120, 160, 255], supported_color_modes: ['color_temp', 'hs'], min_color_temp_kelvin: 2200, max_color_temp_kelvin: 6500 }),
+  'light.office':        st('off', { friendly_name: 'Desk lamp', supported_color_modes: ['onoff'] }),
   'cover.living_room':   st('open', { friendly_name: 'Living room shutter', current_position: 100 }),
   'cover.balcony':       st('open', { friendly_name: 'Balcony shutter', current_position: 60 }),
   'cover.bedroom':       st('closed', { friendly_name: 'Bedroom shutter', current_position: 0 }),
@@ -66,6 +97,13 @@ let hass = {
   states, entities, devices: {},
   areas: Object.fromEntries(Object.entries(areas).map(([id, name]) => [id, { area_id: id, name }])),
   themes: { darkMode: q.get('theme') !== 'light' },
+  // Home Assistant translates states and adds units; here a plain English version
+  formatEntityState(s) {
+    const u = s.attributes.unit_of_measurement;
+    if (u) return `${s.state} ${u}`;
+    const t = s.state.replace(/_/g, ' ');
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  },
   callService(domain, service, data) { log(`callService ${domain}.${service} ${JSON.stringify(data)}`); },
 };
 const card = document.getElementById('card');
@@ -96,6 +134,7 @@ for (const [label, fn] of Object.entries(buttons)) {
   document.getElementById('bar').appendChild(b);
 }
 if (q.get('room')) setTimeout(() => card.selectRoom(q.get('room')), 300);
+if (q.get('popup')) setTimeout(() => card.openDevicePopup(q.get('popup')), 900);
 if (q.get('bare')) { for (const el of document.querySelectorAll('main > :not(floorplan-3d-card)')) el.style.display = 'none';
   document.querySelector('main').style.padding = '0'; }
 window.__card = card;

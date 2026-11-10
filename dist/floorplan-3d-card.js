@@ -7,6 +7,7 @@
  *   floorplan-3d-card.js   this file: the card, Home Assistant glue, panel
  *   floorplan-geometry.js  config validation, walls derived from rooms (pure)
  *   floorplan-scene.js     Three.js scene, camera, picking, overlays
+ *   floorplan-devices.js   device tiles and popups (DeviceTiles mixin, usable by other cards)
  *   floorplan-demo.js      the demo apartment used by the card picker
  *   three.module.js        Three.js r128 (MIT)
  *
@@ -17,12 +18,13 @@
  * modules after an update (HACS versions only this file's URL). Bump VERSION
  * and every ?v= together; tests/release.test.mjs checks it.
  */
-import { normalizeConfig, buildPlan } from './floorplan-geometry.js?v=0.3.0';
-import { FloorplanScene, THREE } from './floorplan-scene.js?v=0.3.0';
-import { DEMO_PLAN } from './floorplan-demo.js?v=0.3.0';
+import { normalizeConfig, buildPlan } from './floorplan-geometry.js?v=0.4.0';
+import { FloorplanScene, THREE } from './floorplan-scene.js?v=0.4.0';
+import { DEMO_PLAN } from './floorplan-demo.js?v=0.4.0';
+import { DeviceTiles, DEVICE_CSS, DEVICE_TEXT } from './floorplan-devices.js?v=0.4.0';
 
-export { THREE, FloorplanScene, normalizeConfig, buildPlan };
-export const VERSION = '0.3.0';
+export { THREE, FloorplanScene, normalizeConfig, buildPlan, DeviceTiles, DEVICE_CSS, DEVICE_TEXT };
+export const VERSION = '0.4.0';
 
 const DOMAIN_ORDER = ['light', 'climate', 'cover', 'fan', 'media_player', 'switch', 'vacuum', 'lock',
   'humidifier', 'water_heater', 'sensor', 'binary_sensor', 'camera', 'scene', 'script', 'button'];
@@ -64,7 +66,7 @@ const CSS = `
   #wrap{position:relative;width:100%;height:var(--fp-height,480px);min-height:320px;overflow:hidden;
     background:#0c1016;border-radius:var(--ha-card-border-radius,12px);color:#e8e4dc;
     font-family:var(--ha-font-family-body,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif);
-    --fp-line:rgba(255,255,255,.08);--fp-dim:#9aa3ad;--fp-accent:var(--primary-color,#ffb35c)}
+    --fp-line:rgba(255,255,255,.08);--fp-dim:#9aa3ad;--fp-txt:#e8e4dc;--fp-accent:var(--primary-color,#ffb35c)}
   canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none}
   #overlay{position:absolute;inset:0;pointer-events:none;z-index:3}
   #overlay > *{pointer-events:auto}
@@ -135,11 +137,12 @@ const HTML = `
         <div id="pChips"></div>
         <div id="pList"></div>
       </div>
+      <div id="fpPop" class="cpop"></div>
       <div id="err"></div>
     </div>
   </ha-card>`;
 
-export class Floorplan3DCard extends HTMLElement {
+export class Floorplan3DCard extends DeviceTiles(HTMLElement) {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -148,6 +151,7 @@ export class Floorplan3DCard extends HTMLElement {
     this._panelLive = [];         // elements of the open panel that get every hass update
     this._panelSeq = 0;           // bumped on every panel change (async renders check it)
     this._enterN = 0;             // entry-animation counter of the open panel
+    this._dtConsumed = new Set(); // lights already shown by a light group in the open panel
     this._applied = {};           // last values pushed to the scene (avoid redundant work)
   }
 
@@ -164,6 +168,11 @@ export class Floorplan3DCard extends HTMLElement {
     if (config.sections !== undefined && (!Array.isArray(config.sections) || config.sections.some(sec =>
       !sec || typeof sec.name !== 'string' || !Array.isArray(sec.domains) || !sec.domains.length)))
       throw new Error('floorplan-3d-card: "sections" must be a list of { name, domains: [domain, …] }');
+    if (config.tiles !== undefined && !['custom', 'native'].includes(config.tiles))
+      throw new Error('floorplan-3d-card: "tiles" must be custom or native');
+    if (config.light_groups !== undefined && (!Array.isArray(config.light_groups) || config.light_groups.some(g =>
+      !g || typeof g.name !== 'string' || !Array.isArray(g.entities) || !g.entities.length)))
+      throw new Error('floorplan-3d-card: "light_groups" must be a list of { name, icon, entities: [light.…, …] }');
     this._config = config;
     this._model = model;
     this._plan = plan;
@@ -173,8 +182,10 @@ export class Floorplan3DCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._dtHass();
     if (this._scene) this._sync();
     this.refreshPanel();
+    this._dtUpdatePopup();
   }
   get hass() { return this._hass; }
 
@@ -190,6 +201,7 @@ export class Floorplan3DCard extends HTMLElement {
     // keep the scene (Lovelace often detaches and re-attaches cards), stop drawing
     if (this._scene) this._scene.setActive(false);
     this._unobserve();
+    this.closeDevicePopup();
   }
 
   // ------------------------------------------------------------ mount
@@ -197,7 +209,7 @@ export class Floorplan3DCard extends HTMLElement {
     const root = this.shadowRoot;
     if (!root.getElementById('wrap')) {
       const style = document.createElement('style');
-      style.textContent = CSS + (this.extraStyles() || '');
+      style.textContent = CSS + DEVICE_CSS + (this.extraStyles() || '');
       root.appendChild(style);
       const tpl = document.createElement('template');
       tpl.innerHTML = HTML;
@@ -397,6 +409,7 @@ export class Floorplan3DCard extends HTMLElement {
    *  entities in sections (the `sections` option), each one from createPanelTile() or a native tile card. */
   async renderRoomPanel(room, list) {
     const seq = this._panelSeq;
+    this._dtConsumed = new Set();
     const ids = this.getRoomEntities(room);
     const chipIds = ids.filter(id => this.isPanelChip(id));
     const chips = this.shadowRoot.getElementById('pChips');
@@ -437,20 +450,34 @@ export class Floorplan3DCard extends HTMLElement {
     return !!cls && cls.includes(deviceClass(this._hass, id));
   }
 
-  /** HOOK: texts of the panel, by key: no_entities, no_area, all_lights (section names: `sections` option). */
-  getText(key) { return TEXT[key] || key; }
+  /** HOOK: texts of the card, by key: no_entities, no_area, all_lights, and the device words in DEVICE_TEXT
+   *  (null there = the state as Home Assistant shows it). Section names: the `sections` option. */
+  getText(key) { return key in TEXT ? TEXT[key] : super.getText(key); }
 
   /** HOOK: elements placed above the sections (called first on every render). Default: none. */
   renderPanelTop(room) { return []; }   // eslint-disable-line no-unused-vars
 
   /** HOOK: the element for one entity of the panel: an element, null for the default tile card,
    *  false to leave the entity out. An element with a `hass` setter gets every hass update. */
-  createPanelTile(id, room) { return null; }   // eslint-disable-line no-unused-vars
+  createPanelTile(id, room) {   // eslint-disable-line no-unused-vars
+    if (this._config.tiles === 'native') return null;
+    if (id.startsWith('light.')) {
+      if (this._dtConsumed.has(id)) return false;            // already in a light group's tile
+      const g = this.deviceGroup(id);
+      if (g) g.entities.forEach(e => this._dtConsumed.add(e));
+    }
+    return this.createDeviceTile(id);                       // null: the native tile card
+  }
 
-  /** HOOK: tap on a window or door. Default: more-info of its cover, else of its contact sensor. */
+  /** HOOK: tap on a window or door. Default: the popup of its cover, else more-info of its contact sensor. */
   onOpeningTap(opening) {
-    const id = opening.cover || opening.contact;
-    if (id) this.openMoreInfo(id);
+    if (opening.cover && this._config.tiles !== 'native') this.openDevicePopup(opening.cover);
+    else if (opening.cover || opening.contact) this.openMoreInfo(opening.cover || opening.contact);
+  }
+
+  /** HOOK (DeviceTiles): the light group of an entity, from the `light_groups` option. */
+  deviceGroup(id) {
+    return (this._config.light_groups || []).find(g => g.entities.includes(id)) || null;
   }
 
   /** HOOK: second line of the panel header. Default: "16.6 m² · 21.4° · 48%". Return '' to hide it. */
@@ -497,6 +524,7 @@ export class Floorplan3DCard extends HTMLElement {
     if (!room) {
       const was = this._room;
       this._closePanel();
+      this.closeDevicePopup();
       this.refreshInset();
       if (was) this._scene.focusRoom(null);
     } else if (this._room !== room.id) {
@@ -538,6 +566,7 @@ export class Floorplan3DCard extends HTMLElement {
 
   _openPanel(room) {
     this._closePanel();
+    this.closeDevicePopup();
     this._room = room.id;
     this.$wrap.classList.add('room');
     const root = this.shadowRoot;
@@ -674,7 +703,7 @@ export class Floorplan3DCard extends HTMLElement {
 
 // extensions can reach everything from the element class, without importing by path:
 //   await customElements.whenDefined('floorplan-3d-card'); const Base = customElements.get('floorplan-3d-card');
-Object.assign(Floorplan3DCard, { THREE, FloorplanScene, normalizeConfig, buildPlan, VERSION });
+Object.assign(Floorplan3DCard, { THREE, FloorplanScene, normalizeConfig, buildPlan, VERSION, DeviceTiles, DEVICE_CSS, DEVICE_TEXT });
 
 // ------------------------------------------------------------ small helpers
 function friendly(hass, id) {

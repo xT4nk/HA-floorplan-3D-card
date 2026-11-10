@@ -2,6 +2,22 @@
 
 What comes next: [ROADMAP.md](ROADMAP.md).
 
+## 0.4.0
+New
+- Tiles and popups of the card for **lights** and **covers**, now the default (`tiles: native` gives back Home
+  Assistant's tile cards and more-info):
+  - light: tap the icon to switch, drag the bar for brightness; the popup has brightness, colour temperature
+    and a colour wheel (only what the light supports; on/off lights open more-info);
+  - cover: up, stop, down, 50%; the popup draws the shutter and sets any position by dragging it;
+  - the tile answers the tap at once (optimistic state) and follows the real state when it arrives;
+  - a red triangle for unavailable devices, low battery and problem sensors of the same device.
+- Tap on a window: the popup of its cover.
+- `light_groups` option: several lights in one tile and one popup.
+- States are Home Assistant's (translated); the card's own words can be translated with `getText`.
+- Extensions: `DeviceTiles` mixin and `DEVICE_CSS` / `DEVICE_TEXT` on the element class, usable by other
+  cards; hook `deviceGroup(id)`; helpers `createDeviceTile`, `openDevicePopup`, `closeDevicePopup`,
+  `refreshDevices`.
+
 ## 0.3.0
 New
 - Room panel in sections: environment sensors (temperature, humidity, illuminance, motion, doors and windows,

@@ -167,7 +167,7 @@ const sections = el => el.shadowRoot.getElementById('pList').querySelectorAll('.
 
 test('panel: chips for environment sensors, tiles in sections, native tile features', async () => {
   const made = withHelpers();
-  const el = mount();
+  const el = mount(Floorplan3DCard, { tiles: 'native' });
   el.hass = panelHass();
   el.selectRoom('living');
   await tick(); await tick();
@@ -251,7 +251,7 @@ test('panel: a late render of a room left meanwhile is dropped', async () => {
 });
 
 test('panel: plain rows outside Home Assistant', async () => {
-  const el = mount();
+  const el = mount(Floorplan3DCard, { tiles: 'native' });
   el.hass = panelHass();
   el.selectRoom('living');
   await tick(); await tick();
@@ -267,4 +267,138 @@ test('panel: getText translates the panel texts', async () => {
   el.selectRoom('bathroom');
   await tick();
   assert.equal(el.shadowRoot.querySelector('#pList .empty').textContent, 'Nessuna entità.');
+});
+
+// ---------------------------------------------------------------- device tiles (0.4.0)
+test('tiles: lights and covers get the card tiles by default, the rest native tile cards', async () => {
+  const made = withHelpers();
+  const el = mount();
+  el.hass = panelHass();
+  el.selectRoom('living');
+  await tick(); await tick();
+  const list = el.shadowRoot.getElementById('pList');
+  assert.equal(list.querySelectorAll('.ct.light').length, 2);
+  assert.equal(list.querySelectorAll('.ct.cover').length, 1);
+  assert.deepEqual(made.map(e => e.cfg.entity).sort(), ['sensor.living_power', 'switch.fan']);
+  const cover = list.querySelector('.ct.cover');
+  assert.equal(cover.querySelector('.cstt').textContent, 'fmt:open');            // Home Assistant's word
+  assert.ok(cover.parentNode.classList.contains('wide'));
+  delete window.loadCardHelpers;
+});
+
+test('tiles: light tile shows brightness, icon toggles, light_groups make one tile', async () => {
+  const el = mount(Floorplan3DCard, { light_groups: [{ name: 'Both', icon: 'mdi:lamps', entities: ['light.lamp', 'light.living'] }] });
+  const h = panelHass();
+  h.states['light.living'].attributes = { brightness: 128, supported_color_modes: ['brightness'], friendly_name: 'Living' };
+  el.hass = h;
+  el.selectRoom('living');
+  await tick(); await tick();
+  const tiles = el.shadowRoot.querySelectorAll('#pList .ct.light');
+  assert.equal(tiles.length, 1);
+  const t = tiles[0];
+  assert.equal(t.querySelector('.cnm').textContent, 'Both');
+  t.querySelector('.cic').dispatchEvent(new Event('click'));
+  assert.deepEqual(h.calls.pop(), ['light', 'turn_off', { entity_id: ['light.lamp', 'light.living'] }]);
+});
+
+test('tiles: cover buttons are optimistic, the patch goes when the real state arrives', async () => {
+  const el = mount();
+  const h = panelHass();
+  h.states['cover.living'].attributes = { current_position: 100, friendly_name: 'Shutter' };
+  el.hass = h;
+  el.selectRoom('living');
+  await tick(); await tick();
+  const t = el.shadowRoot.querySelector('#pList .ct.cover');
+  t.querySelector('[data-a=down]').dispatchEvent(new Event('click'));
+  assert.deepEqual(h.calls.pop(), ['cover', 'close_cover', { entity_id: 'cover.living' }]);
+  assert.equal(t.querySelector('.cstt').textContent, 'fmt:closing');              // right away
+  const h2 = panelHass();
+  h2.states['cover.living'] = { entity_id: 'cover.living', state: 'closed', attributes: { current_position: 0 } };
+  el.hass = h2;
+  assert.equal(el._dtOpt['cover.living'], undefined);
+  assert.equal(t.querySelector('.cstt').textContent, 'fmt:closed');
+});
+
+test('tiles: getText gives the card its own words', async () => {
+  class It extends Floorplan3DCard {
+    getText(k) { return { cover_open: 'Aperta', cover_open_pct: 'Aperta · {pct}%' }[k] ?? super.getText(k); }
+  }
+  const el = mount(It);
+  const h = panelHass();
+  h.states['cover.living'].attributes = { current_position: 40 };
+  el.hass = h;
+  el.selectRoom('living');
+  await tick(); await tick();
+  assert.equal(el.shadowRoot.querySelector('#pList .ct.cover .cstt').textContent, 'Aperta · 40%');
+});
+
+test('popups: window tap opens the cover popup; closing the room closes it', async () => {
+  const el = mount();
+  const h = panelHass();
+  h.states['cover.balcony'].attributes = { current_position: 100, friendly_name: 'Balcony' };
+  el.hass = h;
+  const op = el._plan.openings.find(o => o.cover === 'cover.balcony');
+  el._onPick({ kind: 'opening', id: op.id, opening: op });
+  const pop = el.shadowRoot.getElementById('fpPop');
+  assert.ok(pop.classList.contains('show'));
+  assert.equal(pop.querySelector('.cph .cn').textContent, 'Balcony');
+  pop.querySelector('.cseg [data-a=close]').onclick();
+  assert.deepEqual(h.calls.pop(), ['cover', 'close_cover', { entity_id: 'cover.balcony' }]);
+  assert.equal(pop.querySelector('.cbig small').textContent, 'fmt:closing');
+  el.selectRoom('living');
+  assert.ok(!pop.classList.contains('show'));
+  const el2 = mount(Floorplan3DCard, { tiles: 'native' });
+  el2.hass = panelHass();
+  let more = null;
+  el2.addEventListener('hass-more-info', e => { more = e.detail.entityId; });
+  el2._onPick({ kind: 'opening', id: op.id, opening: op });
+  assert.equal(more, 'cover.balcony');                                             // native: more-info
+});
+
+test('popups: on/off-only light opens more-info, a dimmable one the popup with warnings', async () => {
+  const el = mount();
+  const h = panelHass();
+  h.states['light.lamp'].attributes = { supported_color_modes: ['onoff'] };
+  h.states['light.living'].attributes = { supported_color_modes: ['color_temp'], brightness: 255, min_color_temp_kelvin: 2000, max_color_temp_kelvin: 6500 };
+  h.entities['light.living'].device_id = 'd1';
+  h.entities['sensor.bulb_battery'] = { entity_id: 'sensor.bulb_battery', device_id: 'd1' };
+  h.states['sensor.bulb_battery'] = { entity_id: 'sensor.bulb_battery', state: '9', attributes: { device_class: 'battery' } };
+  el.hass = h;
+  let more = null;
+  el.addEventListener('hass-more-info', e => { more = e.detail.entityId; });
+  el.openDevicePopup('light.lamp');
+  assert.equal(more, 'light.lamp');
+  el.openDevicePopup('light.living');
+  const pop = el.shadowRoot.getElementById('fpPop');
+  assert.ok(pop.classList.contains('show'));
+  assert.equal(pop.querySelector('.cbig .v').textContent, '100%');
+  assert.equal(pop.querySelector('.cpwarn').textContent, '⚠️ Battery low (9%)');
+  el.disconnectedCallback();
+  assert.ok(!pop.classList.contains('show'));
+});
+
+test('config: tiles and light_groups are checked', () => {
+  assert.throws(() => mount(Floorplan3DCard, { tiles: 'fancy' }), /tiles/);
+  assert.throws(() => mount(Floorplan3DCard, { light_groups: [{ name: 'x' }] }), /light_groups/);
+});
+
+test('DeviceTiles works in another card, as in docs/EXTENDING.md', () => {
+  const { DeviceTiles, DEVICE_CSS } = Floorplan3DCard;
+  class MyTiles extends DeviceTiles(HTMLElement) {
+    set hass(h) { this._hass = h; this._dtHass(); if (this._tile) this._tile.hass = h; this._dtUpdatePopup(); }
+    setConfig(c) {
+      if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = `<style>${DEVICE_CSS}</style><div id="fpPop" class="cpop"></div>`;
+      this._tile = this.createDeviceTile(c.entity);
+      this.shadowRoot.appendChild(this._tile);
+    }
+  }
+  customElements.define('my-tiles-test', MyTiles);
+  const el = document.createElement('my-tiles-test');
+  const h = panelHass();
+  el._hass = h;
+  el.setConfig({ entity: 'cover.living' });
+  el.hass = h;
+  assert.equal(el.shadowRoot.querySelector('.ct.cover .cstt').textContent, 'fmt:open');
+  el.shadowRoot.querySelector('.ct.cover').dispatchEvent(new Event('click'));
+  assert.ok(el.shadowRoot.getElementById('fpPop').classList.contains('show'));
 });

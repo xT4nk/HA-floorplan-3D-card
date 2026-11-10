@@ -6,7 +6,8 @@ The card is three layers, each usable on its own:
 |---|---|---|
 | `floorplan-geometry.js` | Validates the config, derives walls from rooms, places openings. Pure functions. | nothing |
 | `floorplan-scene.js` | `FloorplanScene`: Three.js scene, camera, picking, focus/ghosts, overlays. Knows nothing about Home Assistant. | Three.js |
-| `floorplan-3d-card.js` | `Floorplan3DCard`: the Lovelace element. Reads `hass`, feeds the scene, renders the panel. | the two above |
+| `floorplan-devices.js` | `DeviceTiles` mixin: tiles and popups of lights and covers, optimistic state, warnings. Knows nothing about the 3D view. | nothing |
+| `floorplan-3d-card.js` | `Floorplan3DCard`: the Lovelace element. Reads `hass`, feeds the scene, renders the panel. | the three above |
 
 ## Your own card on top of it
 Take the class, subclass it, override the hooks you need, register a new element name. The plan stays in
@@ -15,7 +16,7 @@ YAML (or in your own file), the engine stays untouched.
 Get the class from the registry instead of importing it by path: HACS loads the card with a `?hacstag=…`
 URL that changes with every update, and importing another URL would load a second copy (or an old one from
 the cache). Everything an extension needs hangs on the class: `THREE`, `FloorplanScene`, `normalizeConfig`,
-`buildPlan`, `VERSION`.
+`buildPlan`, `VERSION`, `DeviceTiles`, `DEVICE_CSS`, `DEVICE_TEXT`.
 
 ```js
 // /config/www/my-home-card.js — add it as a resource (JavaScript module) next to the HACS one
@@ -89,7 +90,8 @@ customElements.define('my-home-card', MyHomeCard);
 | `isPanelChip(id)` | temperature, humidity, illuminance sensors; motion, occupancy, door, window, moisture | chips row at the top of the panel instead of a section |
 | `renderPanelTop(room)` | `[]` | elements above the sections; called first on every render. A `.grid` element is animated tile by tile |
 | `createPanelTile(id, room)` | `null` | an element for this entity, `null` for the native tile card, `false` to leave it out |
-| `getText(key)` | English | texts of the panel: `no_entities`, `no_area`, `all_lights` (section names come from the `sections` option) |
+| `getText(key)` | English | texts of the card: `no_entities`, `no_area`, `all_lights` and the device words in `DEVICE_TEXT` (`null` there = the state as Home Assistant shows it, translated). Placeholders: `{state}`, `{pct}`. Section names come from the `sections` option |
+| `deviceGroup(id)` | from `light_groups` | `{ name, icon, entities }` shown and driven as one light, or `null` |
 | `onOpeningTap(opening)` | more-info of `cover`, else `contact` | `opening` has `id, type, name, cover, contact, rooms, center…` |
 | `getRoomMeta(room, state)` | `"16.6 m² · 21.4° · 48%"` | second line of the panel header; `''` hides it |
 | `getViewInset(roomId)` | the panel: `{left}`, or `{bottom}` on narrow cards; `null` in the overview | `{left, right, top, bottom}` in px covered over the 3D view; the plan is framed in the rest. Call `refreshInset()` when your overlays change size |
@@ -105,6 +107,8 @@ narrow cards), `wide` (full width in a grid), `chip`, `row`, `empty`.
 Helpers: `selectRoom(id | null)` (a `part_of` room opens its parent), `openMoreInfo(entityId)`,
 `areaEntities(room)` (entity ids of the room's area, cached), `refreshInset()`, `refreshPanel()` (push `hass`
 to the panel elements again, after a local change), `isMobile`,
+`createDeviceTile(id)` (the card's tile for a light or cover, `null` for other domains), `openDevicePopup(id)`,
+`closeDevicePopup()`, `refreshDevices()`,
 `this.overlay` (layer over the canvas), `this.hass`. Event: `floorplan-room-changed` (`detail.room`).
 
 Names starting with `_` are internal and may change in any release; mixins can use them for their own
@@ -113,6 +117,26 @@ fields without clashing with the hooks above.
 `room` objects are the normalized rooms: `id, name, area, poly, bbox, labelAt, floor, entities, exclude,
 lights, temperature, humidity, walls, railing, part_of, disabled, raw` (`raw` is the YAML as written, so you
 can add your own keys to it).
+
+## Device tiles in another card
+`DeviceTiles` works without the 3D view. The host needs `this._hass`, a shadow root with an element
+`#fpPop` (class `cpop`) for the popups and `DEVICE_CSS` in its styles, and calls `this._dtHass()` at the start
+of `set hass`, then pushes `hass` to its tiles and calls `this._dtUpdatePopup()`:
+
+```js
+const { DeviceTiles, DEVICE_CSS } = customElements.get('floorplan-3d-card');
+class MyTiles extends DeviceTiles(HTMLElement) {
+  set hass(h) { this._hass = h; this._dtHass(); if (this._tile) this._tile.hass = h; this._dtUpdatePopup(); }
+  setConfig(c) {
+    if (!this.shadowRoot) this.attachShadow({ mode: 'open' }).innerHTML = `<style>${DEVICE_CSS}
+      :host{--fp-txt:#e8e4dc;--fp-dim:#9aa3ad;--fp-accent:#ffb35c;--fp-line:rgba(255,255,255,.08)}</style>
+      <div id="fpPop" class="cpop"></div>`;
+    this._tile = this.createDeviceTile(c.entity);
+    this.shadowRoot.appendChild(this._tile);
+  }
+}
+customElements.define('my-tiles', MyTiles);
+```
 
 ## Scene API (`FloorplanScene`)
 `setRoomGlow(id, 0..1, [r,g,b])`, `setRoomSubLabel(id, text)`, `setRoomName(id, text)`,

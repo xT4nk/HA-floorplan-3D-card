@@ -68,14 +68,20 @@ class Text_ extends Node_ {
   set textContent(t) { this.data = t; }
   cloneNode() { return new Text_(this.data); }
 }
-class Fragment_ extends Node_ { cloneNode(deep) { const f = new Fragment_(); if (deep) for (const c of this.childNodes) f.appendChild(c.cloneNode(true)); return f; } }
+class Fragment_ extends Node_ {
+  set innerHTML(h) { for (const c of [...this.childNodes]) this.removeChild(c); parseInto(this, h); }   // a shadow root has it
+  cloneNode(deep) { const f = new Fragment_(); if (deep) for (const c of this.childNodes) f.appendChild(c.cloneNode(true)); return f; } }
 
 export class Element_ extends Node_ {
   constructor(tag) {
     super(); this.localName = this.tagName = (tag || 'div').toLowerCase(); this.attrs = {};
     this.classList = new ClassList(this);
     const st = {}; st.setProperty = (k, v) => { st[k] = v; }; st.removeProperty = k => { delete st[k]; };
-    this.style = st; this.dataset = {};
+    this.style = st;
+    // dataset reflects the data-* attributes, as in a browser
+    const camel = k => 'data-' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
+    this.dataset = new Proxy({}, { get: (t, k) => typeof k === 'string' ? this.attrs[camel(k)] : undefined,
+      set: (t, k, v) => { this.attrs[camel(k)] = String(v); return true; } });
     this.offsetWidth = 0; this.offsetHeight = 0; this.clientWidth = 0; this.clientHeight = 0;
     this.scrollTop = 0; this.scrollHeight = 0;
   }

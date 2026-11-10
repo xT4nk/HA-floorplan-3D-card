@@ -8,7 +8,11 @@ Describe the rooms and where the doors and windows are; the walls are built for 
 - **Tap a room**: the camera flies in, the other rooms fade out, and a side panel shows that room's Home
   Assistant **area**: temperature, humidity and motion as chips, the rest as native tile cards grouped in
   sections (Lights, Covers, Climate…), with one switch for all the lights of the room.
-- **Tap a window**: more-info of its cover (or contact sensor).
+- **Tiles and popups of its own** for lights and covers: brightness bar, colour and colour temperature,
+  shutter drawn in the popup and dragged to a position, warnings for low battery or unavailable devices.
+  The tile answers the tap at once, even when the device reports back late. Other domains use Home Assistant's
+  tile cards (more coming).
+- **Tap a window**: the popup of its cover (or more-info of its contact sensor).
 - Drag to rotate, pinch or scroll to zoom, two fingers or right-drag to pan.
 - Light on resources: frames are drawn only when something changes (no render loop), auto-rotation is off
   by default, nothing is drawn while the dashboard is in the background.
@@ -17,6 +21,8 @@ Describe the rooms and where the doors and windows are; the walls are built for 
 
 ![Overview](docs/screenshot.png)
 ![Room](docs/screenshot-room.png)
+![Light popup](docs/screenshot-light.png)
+![Shutter popup](docs/screenshot-cover.png)
 
 ## Installation
 **HACS** (custom repository): HACS → ⋮ → *Custom repositories* → this repository's URL, type *Dashboard* →
@@ -72,6 +78,8 @@ How walls are made: every room edge becomes a wall; where two rooms touch, the s
 | `floor_height` | `10` | Visual thickness of the floor |
 | `sill` | `45` | Default window sill, on the `wall_height` scale |
 | `door_width` / `window_width` | `80` / `120` | Defaults when `width` is omitted |
+| `tiles` | `custom` | `custom`: the card's tiles and popups where it has them; `native`: Home Assistant's tile cards and more-info |
+| `light_groups` | — | Lights shown and driven as one tile: `- { name: TV lamps, icon: mdi:lamps, entities: [light.a, light.b] }` |
 | `sections` | Lights, Covers, Climate, Media, Vacuum, Other, Sensors | Sections of the room panel: `- { name: Luci, domains: [light] }`. Rename them, reorder them, merge domains; entities of a domain in no section are not shown |
 
 ### Room options
